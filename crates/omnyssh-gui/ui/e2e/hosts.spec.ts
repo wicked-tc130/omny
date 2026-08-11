@@ -35,9 +35,10 @@ async function boot(page: Page): Promise<void> {
               setTimeout(() => fire('hosts-loaded', [...state.hosts]), 0);
               return Promise.resolve(null);
             case 'save_host': {
-              // Upsert by name as a manual host; the outbound view (HostDto) omits the
+              // Upsert/rename a manual host; the outbound view (HostDto) omits the
               // secret fields the input carried, mirroring the backend map (§3.4).
               const h = args.input as Record<string, unknown> & { name: string; identityFile?: string };
+              const previousName = (args.previousName as string | null | undefined) ?? undefined;
               const view = {
                 name: h.name,
                 hostname: h.hostname,
@@ -48,7 +49,9 @@ async function boot(page: Page): Promise<void> {
                 source: 'manual',
                 hasKey: !!h.identityFile
               };
-              const i = state.hosts.findIndex((x) => (x as { name: string }).name === view.name);
+              const i = state.hosts.findIndex(
+                (x) => (x as { name: string }).name === (previousName ?? view.name)
+              );
               if (i >= 0) state.hosts[i] = { ...state.hosts[i], ...view };
               else state.hosts.push(view);
               return Promise.resolve(null);
@@ -96,22 +99,37 @@ test('adds a host and it appears as a card', async ({ page }) => {
   await expect(page.getByText('postgres@db-1.example.com:22')).toBeVisible();
 });
 
-test('edits a manual host in place', async ({ page }) => {
+test('edits and renames a manual host in place', async ({ page }) => {
   await boot(page);
 
   await page.getByRole('button', { name: 'Edit web-1' }).click();
   const editor = page.getByRole('dialog', { name: 'Edit host' });
   await expect(editor).toBeVisible();
 
-  // The name is the on-disk key: fixed on edit.
-  await expect(editor.getByLabel(/^Name/)).toHaveAttribute('readonly', '');
+  const name = editor.getByLabel('Name', { exact: true });
+  await expect(name).toBeEditable();
+  await name.fill('web-renamed');
 
   const hostname = editor.getByLabel('Hostname / IP');
   await hostname.fill('web-1b.example.com');
   await editor.getByRole('button', { name: 'Save' }).click();
 
   await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page.getByText('web-renamed', { exact: true })).toBeVisible();
+  await expect(page.getByText('web-1', { exact: true })).toHaveCount(0);
   await expect(page.getByText('deploy@web-1b.example.com:22')).toBeVisible();
+});
+
+test('rejects a rename whose target name already exists', async ({ page }) => {
+  await boot(page);
+
+  await page.getByRole('button', { name: 'Edit web-1' }).click();
+  const editor = page.getByRole('dialog', { name: 'Edit host' });
+  await editor.getByLabel('Name', { exact: true }).fill('imported');
+  await editor.getByRole('button', { name: 'Save' }).click();
+
+  await expect(editor).toBeVisible();
+  await expect(editor.getByText('A host named "imported" already exists')).toBeVisible();
 });
 
 test('deletes a manual host after confirmation', async ({ page }) => {

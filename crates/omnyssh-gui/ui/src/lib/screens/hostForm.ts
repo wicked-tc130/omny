@@ -13,6 +13,7 @@ export interface HostFormFields {
   port: string;
   identityFile: string;
   password: string;
+  startupCommand: string;
   tags: string;
   notes: string;
 }
@@ -20,7 +21,17 @@ export interface HostFormFields {
 export function emptyForm(): HostFormFields {
   // Port pre-seeded to the SSH default; user blank (placeholder shows `root`, the
   // default the validation applies when it is left empty).
-  return { name: '', hostname: '', user: '', port: '22', identityFile: '', password: '', tags: '', notes: '' };
+  return {
+    name: '',
+    hostname: '',
+    user: '',
+    port: '22',
+    identityFile: '',
+    password: '',
+    startupCommand: '',
+    tags: '',
+    notes: ''
+  };
 }
 
 /** Seed the edit form from a `HostDto`. `identityFile`/`password` are intentionally
@@ -34,6 +45,7 @@ export function formFromHost(h: HostDto): HostFormFields {
     port: String(h.port),
     identityFile: '',
     password: '',
+    startupCommand: h.startupCommand ?? '',
     tags: h.tags.join(', '),
     notes: h.notes ?? ''
   };
@@ -50,7 +62,7 @@ export type HostFormResult = { ok: true; input: HostInputDto } | { ok: false; er
 
 /** Validate + build a `HostInputDto`, or return an error message. Mirrors the TUI's
  *  `to_host`: name and hostname are required; user defaults to `root` and port to `22`
- *  when blank; port must be a 1–65535 integer; identity/password/notes are trimmed and
+ *  when blank; port must be a 1–65535 integer; optional text fields are trimmed and
  *  dropped to `undefined` when empty (so the wire form stays sparse, §4.1). `proxyJump`
  *  is not surfaced by the form (parity with the TUI, which sets it `None`) — `save_host`
  *  preserves any existing value across an edit. */
@@ -74,6 +86,7 @@ export function formToInput(f: HostFormFields): HostFormResult {
 
   const identityFile = f.identityFile.trim();
   const password = f.password.trim();
+  const startupCommand = f.startupCommand.trim();
   const notes = f.notes.trim();
   const tags = splitCsv(f.tags);
   return {
@@ -85,6 +98,7 @@ export function formToInput(f: HostFormFields): HostFormResult {
       port,
       identityFile: identityFile || undefined,
       password: password || undefined,
+      startupCommand: startupCommand || undefined,
       tags,
       notes: notes || undefined
     }

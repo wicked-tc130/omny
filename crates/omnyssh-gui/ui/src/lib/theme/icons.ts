@@ -3,17 +3,14 @@
 export type IconName =
   | 'sun'
   | 'moon'
-  | 'command'
   | 'search'
   | 'dashboard'
-  | 'snippets'
   | 'sftp'
   | 'terminal'
   | 'close'
   | 'collapse'
   | 'expand'
   | 'check'
-  | 'play'
   | 'edit'
   | 'trash'
   | 'plus'
@@ -23,7 +20,5 @@ export type IconName =
   | 'download'
   | 'refresh'
   | 'key'
-  | 'shield'
   | 'settings'
-  | 'telegram'
-  | 'star';
+  | 'grip';

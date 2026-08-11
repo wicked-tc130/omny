@@ -30,12 +30,10 @@
   let error = $state<string | null>(null);
   let saving = $state(false);
   let nameEl = $state<HTMLInputElement>();
-  let hostnameEl = $state<HTMLInputElement>();
 
-  // The name is the on-disk key; a rename can't carry backend-only secrets across the
-  // boundary (§3.4), so on edit it is immutable — rename by delete + re-add. Focus the
-  // first editable field accordingly.
-  onMount(() => (mode === 'add' ? nameEl : hostnameEl)?.focus());
+  // A backend rename now preserves secrets and metadata atomically, so Name is a
+  // normal editable field in both modes and receives the initial focus.
+  onMount(() => nameEl?.focus());
 
   async function save(): Promise<void> {
     const result = formToInput(fields);
@@ -78,20 +76,13 @@
 
     <div class="min-h-0 flex-1 space-y-3.5 overflow-y-auto px-5 py-4">
       <label class={label}>
-        <span>Name {mode === 'edit' ? '(fixed)' : ''}</span>
-        <input
-          bind:this={nameEl}
-          bind:value={fields.name}
-          class="{field} {mode === 'edit' ? 'cursor-not-allowed text-muted' : ''}"
-          placeholder="web-prod-1"
-          readonly={mode === 'edit'}
-          title={mode === 'edit' ? 'To rename, delete this host and add it again' : undefined}
-        />
+        <span>Name</span>
+        <input bind:this={nameEl} bind:value={fields.name} class={field} placeholder="web-prod-1" />
       </label>
 
       <label class={label}>
         <span>Hostname / IP</span>
-        <input bind:this={hostnameEl} bind:value={fields.hostname} class="{field} font-mono" placeholder="10.0.0.1" />
+        <input bind:value={fields.hostname} class="{field} font-mono" placeholder="10.0.0.1" />
       </label>
 
       <div class="grid grid-cols-[1fr,7rem] gap-3">
@@ -123,6 +114,19 @@
           placeholder={secretHint ?? 'For initial key setup only'}
           autocomplete="off"
         />
+      </label>
+
+      <label class={label}>
+        <span>Terminal startup command</span>
+        <textarea
+          bind:value={fields.startupCommand}
+          rows="2"
+          class="{field} resize-y font-mono"
+          placeholder="ssh -tt app@10.0.0.2 'sudo -iu developer'"
+        ></textarea>
+        <span class="font-normal text-faint">
+          Sent after the interactive shell opens. Dashboard metrics and SFTP still use the host above.
+        </span>
       </label>
 
       <label class={label}>

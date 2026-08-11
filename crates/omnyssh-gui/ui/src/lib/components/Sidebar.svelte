@@ -1,7 +1,6 @@
 <script lang="ts">
-  // Left region (tech-gui.md §2): header (logo + collapse), the four entry points
-  // (two selectors that hold a highlight, two spawners that open sessions), the
-  // sessions list, and the footer (palette + theme toggle, §5.1). The active
+  // Left region (tech-gui.md §2): header (logo + collapse), Dashboard + SFTP/SSH,
+  // the sessions list, and the footer (settings + theme toggle, §5.1). The active
   // highlight is the brand's accent inversion, so exactly one filled row — a
   // selector or a session — is visible at any moment (the §2 invariant, made legible).
   import Logo from './Logo.svelte';
@@ -18,7 +17,6 @@
   import { sidebarCollapsed } from '$lib/stores/ui';
   import { spawnSession, closeSession } from '$lib/stores/navigation';
   import { palette } from '$lib/stores/palette';
-  import { support } from '$lib/stores/support';
 
   // Action-first spawn (tech-gui.md §2): a spawner opens the host-picker, then creates
   // a session of its kind for the chosen host. A dismissed picker spawns nothing.
@@ -27,16 +25,13 @@
     if (host) spawnSession(kind, host.name);
   }
 
-  type Selector = { kind: 'dashboard' | 'snippets'; label: string; icon: IconName };
+  type Selector = { kind: 'dashboard'; label: string; icon: IconName };
   type Spawner = { kind: SessionKind; label: string; icon: IconName };
 
-  const selectors: Selector[] = [
-    { kind: 'dashboard', label: 'Dashboard', icon: 'dashboard' },
-    { kind: 'snippets', label: 'Snippets', icon: 'snippets' }
-  ];
+  const selectors: Selector[] = [{ kind: 'dashboard', label: 'Dashboard', icon: 'dashboard' }];
   const spawners: Spawner[] = [
     { kind: 'sftp', label: 'SFTP', icon: 'sftp' },
-    { kind: 'terminal', label: 'Terminal', icon: 'terminal' }
+    { kind: 'terminal', label: 'SSH', icon: 'terminal' }
   ];
 
   const rowBase = 'flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm transition';
@@ -55,7 +50,7 @@
   >
     {#if !$sidebarCollapsed}
       <Logo size={22} />
-      <span class="flex-1 truncate text-sm font-bold tracking-wide">OmnySSH</span>
+      <span class="flex-1 truncate text-sm font-bold tracking-wide">Omny</span>
     {/if}
     <Button
       variant="icon"
@@ -78,8 +73,7 @@
               : ''}"
             title={sel.label}
             aria-current={$activeEntity.kind === sel.kind ? 'page' : undefined}
-            onclick={() =>
-              sel.kind === 'dashboard' ? activeEntity.selectDashboard() : activeEntity.selectSnippets()}
+            onclick={() => activeEntity.selectDashboard()}
           >
             <Icon name={sel.icon} />
             {#if !$sidebarCollapsed}<span class="truncate">{sel.label}</span>{/if}
@@ -153,18 +147,8 @@
       ? 'flex flex-col items-center gap-1'
       : 'flex items-center gap-1'}"
   >
-    <Button variant="icon" title="Command palette (⌘K)" onclick={() => palette.open()}>
-      <Icon name="command" />
-    </Button>
-    <ThemeToggle />
-    <!-- Support/about overlay: free + open-source note and the two ways to help.
-         Opens a modal, not a screen, so it holds no highlight and never becomes the
-         active entity (§2). Sits left of the gear, icon-only so it survives collapse. -->
-    <Button variant="icon" title="Support OmnySSH" onclick={() => support.open()}>
-      <Icon name="telegram" />
-    </Button>
     <!-- Settings is a selector-like screen; the gear holds the active highlight like
-         Dashboard/Snippets do, and stays icon-only so it survives collapse (§5.1). -->
+         Dashboard does, and stays icon-only so it survives collapse (§5.1). -->
     <button
       type="button"
       class="grid h-9 w-9 place-items-center rounded-full transition {focusRing} {$activeEntity.kind ===
@@ -178,5 +162,6 @@
     >
       <Icon name="settings" />
     </button>
+    <ThemeToggle />
   </footer>
 </aside>

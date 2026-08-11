@@ -5,22 +5,15 @@ import { hosts } from '$lib/stores/hosts';
 import { statuses } from '$lib/stores/statuses';
 import { metrics } from '$lib/stores/metrics';
 import { services } from '$lib/stores/services';
-import { snippetRun, beginRun, clearRun } from '$lib/stores/snippets';
 import { sessions } from '$lib/stores/sessions';
 import { lastError } from '$lib/stores/notifications';
-import { keySetup, dismissKeySetup, beginKeySetup } from '$lib/stores/keySetup';
 import {
   applyError,
   applyHostStatusChanged,
   applyHostsLoaded,
-  applyKeySetupComplete,
-  applyKeySetupFailed,
-  applyKeySetupProgress,
-  applyKeySetupRollback,
   applyMetricsUpdated,
   applyServicesDetected,
   applyServicesFailed,
-  applySnippetResult,
   applyTerminalExited,
   terminalDidExit
 } from './router';
@@ -145,16 +138,6 @@ describe('ipc event router', () => {
     expect(get(lastError)).toBe('boom');
   });
 
-  it('routes a snippet-result into the active run, keyed by host', () => {
-    beginRun('deploy', ['web-1', 'web-2']);
-    applySnippetResult({ hostName: 'web-2', snippetName: 'deploy', ok: true, output: 'done' });
-
-    const run = get(snippetRun);
-    expect(run?.entries[0].pending).toBe(true); // web-1 untouched
-    expect(run?.entries[1]).toEqual({ hostName: 'web-2', pending: false, ok: true, output: 'done' });
-    clearRun();
-  });
-
   it('terminal-exited closes the tab matched by backend id', () => {
     const tab = sessions.spawn('terminal', 'web-1');
     sessions.setTermId(tab.id, 501);
@@ -170,34 +153,5 @@ describe('ipc event router', () => {
     // ...then the tab records its id and learns it already exited (consumed once).
     expect(terminalDidExit(777)).toBe(true);
     expect(terminalDidExit(777)).toBe(false);
-  });
-
-  it('routes key-setup progress into the active run, then a terminal outcome', () => {
-    beginKeySetup('web-1');
-    applyKeySetupProgress({
-      hostName: 'web-1',
-      step: { index: 3, total: 6, description: 'Verifying key authentication' }
-    });
-    expect(get(keySetup)).toEqual({
-      hostName: 'web-1',
-      phase: { kind: 'running', step: { index: 3, total: 6, description: 'Verifying key authentication' } }
-    });
-
-    applyKeySetupComplete({ hostName: 'web-1', keyPath: '/k/id_ed25519' });
-    expect(get(keySetup)).toEqual({
-      hostName: 'web-1',
-      phase: { kind: 'complete', keyPath: '/k/id_ed25519' }
-    });
-    dismissKeySetup();
-  });
-
-  it('a key-setup failure/rollback shows for its host even with no open run', () => {
-    dismissKeySetup(); // nothing open
-    applyKeySetupFailed({ hostName: 'db-1', error: 'Connection failed' });
-    expect(get(keySetup)).toEqual({ hostName: 'db-1', phase: { kind: 'failed', error: 'Connection failed' } });
-
-    applyKeySetupRollback({ hostName: 'db-1', result: 'Restored.' });
-    expect(get(keySetup)).toEqual({ hostName: 'db-1', phase: { kind: 'rolledBack', result: 'Restored.' } });
-    dismissKeySetup();
   });
 });

@@ -1,6 +1,6 @@
 //! Terminal session commands (tech-gui.md §4.2). Thin wrappers over the PTY manager
 //! and session registry in `GuiState`. Output flows out-of-band on the per-session
-//! raw `Channel` (§3.3/§3.6) — never as a command return or a global event; the
+//! byte `Channel` (§3.3/§3.6) — never as a command return or a global event; the
 //! frontend-facing ids are the registry's public ids.
 
 use tauri::ipc::Channel;
@@ -30,7 +30,7 @@ pub async fn terminal_open(
 }
 
 /// Send keystrokes / pasted bytes to a terminal (tech-gui.md §4.2). Input is
-/// low-volume, so the ordinary `number[]` path is fine here (only output is raw).
+/// low-volume, so the ordinary `number[]` path is fine here.
 #[tauri::command]
 #[specta::specta]
 pub fn terminal_write(
@@ -39,6 +39,15 @@ pub fn terminal_write(
     data: Vec<u8>,
 ) -> Result<(), CommandError> {
     state.write_terminal(session_id, &data);
+    Ok(())
+}
+
+/// Acknowledge that the frontend recorded the returned id and xterm can consume
+/// output. This flushes bytes held during the opening IPC response.
+#[tauri::command]
+#[specta::specta]
+pub fn terminal_ready(state: State<'_, GuiState>, session_id: u64) -> Result<(), CommandError> {
+    state.ready_terminal(session_id);
     Ok(())
 }
 

@@ -17,6 +17,7 @@ import { hosts } from '$lib/stores/hosts';
 import { statuses } from '$lib/stores/statuses';
 import { metrics } from '$lib/stores/metrics';
 import { services, type HostServices } from '$lib/stores/services';
+import { hostOrder, orderedByNames } from '$lib/stores/hostOrder';
 
 // Metric severity mirrors the core's `metrics::threshold_level` (Ok < 60 <= Warn <=
 // 85 < Crit) — the single source of truth for server-state colour (tech-gui.md §5).
@@ -125,9 +126,9 @@ export function deriveCard(
 
 /** Live dashboard cards, one per host, recomputed as any live store changes. */
 export const serverCards = derived(
-  [hosts, statuses, metrics, services],
-  ([$hosts, $statuses, $metrics, $services]) =>
-    $hosts.map((host) =>
+  [hosts, statuses, metrics, services, hostOrder],
+  ([$hosts, $statuses, $metrics, $services, $hostOrder]) =>
+    orderedByNames($hosts, (host) => host.name, $hostOrder).map((host) =>
       deriveCard(host, $statuses.get(host.name), $metrics.get(host.name), $services.get(host.name))
     )
 );

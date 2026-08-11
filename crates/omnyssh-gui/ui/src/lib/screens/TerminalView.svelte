@@ -15,7 +15,13 @@
   import { closeSession } from '$lib/stores/navigation';
   import { terminalDidExit } from '$lib/ipc/router';
   import { lastError } from '$lib/stores/notifications';
-  import { terminalOpen, terminalWrite, terminalResize, terminalClose } from '$lib/ipc/commands';
+  import {
+    terminalOpen,
+    terminalReady,
+    terminalWrite,
+    terminalResize,
+    terminalClose
+  } from '$lib/ipc/commands';
   import { shouldFadeTop } from './terminalFade';
   import { chunkBytes } from './terminalInput';
   import type { TerminalBytes } from '$lib/bindings';
@@ -55,6 +61,11 @@
   let themeUnsub: (() => void) | undefined;
   let resizeObserver: ResizeObserver | undefined;
   let fitScheduled = false;
+  // A fast host can emit its banner/prompt before `terminalOpen` returns. Hold those
+  // chunks until xterm has its final size, input handlers, and ready state; writing
+  // them while the component is still initializing can leave WebKit's canvas blank
+  // until some later output arrives.
+  let pendingOutput: Uint8Array[] = [];
   // The top-edge fade dissolves scrolled output into the top edge, but never the live
   // prompt: after `clear`/Ctrl+L the cursor homes to the top, so the fade must lift
   // there (see terminalFade). Recomputed after every write too, since those resets
@@ -86,6 +97,16 @@
     });
   }
 
+  function writeOutput(bytes: Uint8Array): void {
+    if (!term) return;
+    term.write(bytes, () => {
+      // WebKit may defer the first xterm canvas paint. Refresh after parsing so a
+      // quiet shell's initial prompt is visible without waiting for more output.
+      if (term) term.refresh(0, Math.max(0, term.rows - 1));
+      syncScrolled();
+    });
+  }
+
   onMount(() => {
     void (async () => {
       const [{ Terminal }, { FitAddon }] = await Promise.all([
@@ -112,8 +133,8 @@
         if (term) term.options.theme = xtermTheme(t);
       });
 
-      // Route raw output into xterm. The channel is typed `number[]`, but the raw path
-      // actually delivers an `ArrayBuffer` (§3.3); `Uint8Array` wraps either.
+      // Route output into xterm. The backend serializes the transparent byte wrapper
+      // as a plain `number[]`; `Uint8Array` gives xterm its preferred binary view.
       const channel = new Channel<TerminalBytes>();
       channel.onmessage = (msg) => {
         if (!term) return;
@@ -121,7 +142,9 @@
           connected = true;
           sessions.setStatus(session.id, 'connected');
         }
-        term.write(new Uint8Array(msg as unknown as ArrayBuffer), syncScrolled);
+        const bytes = new Uint8Array(msg);
+        if (ready) writeOutput(bytes);
+        else pendingOutput.push(bytes);
       };
 
       // Fit before opening so the remote PTY starts at the visible size.
@@ -149,6 +172,11 @@
       resizeObserver.observe(container);
 
       ready = true;
+      for (const bytes of pendingOutput) writeOutput(bytes);
+      pendingOutput = [];
+      // Backend bytes emitted before the opening invoke returns are held until this
+      // acknowledgement, eliminating the intermittent blank-on-open WebKit race.
+      await terminalReady(id);
       if (active) term.focus();
     })().catch((err) => {
       // `terminal_open` itself failed (e.g. an unsupported ProxyJump host): no

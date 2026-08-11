@@ -6,8 +6,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::dto::{
-    ConnectionStatusDto, FileEntryDto, HostDto, KeySetupStepDto, MetricsDto, ServiceDto,
-    TransferProgressDto, UpdateInfoDto,
+    ConnectionStatusDto, FileEntryDto, HostDto, MetricsDto, ServiceDto, TransferProgressDto,
 };
 
 /// Full host list broadcast. Emitted by `reload_hosts` after refreshing the
@@ -45,20 +44,6 @@ pub struct ServicesDetected {
 pub struct ServicesFailed {
     pub host_name: String,
     pub message: String,
-}
-
-/// Result of running a snippet on one host (tech-gui.md §4.3). Emitted directly by
-/// `execute_snippet` per host (one-shot `SshSession::run_command`), not via the
-/// shared bridge — the same "the command owns the result" pattern the SFTP
-/// per-session forwarder uses (§3.4). The core's `Result<String, String>` is
-/// flattened to `ok` + `output` (stdout on success, the error message on failure).
-#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, tauri_specta::Event)]
-#[serde(rename_all = "camelCase")]
-pub struct SnippetResult {
-    pub host_name: String,
-    pub snippet_name: String,
-    pub ok: bool,
-    pub output: String,
 }
 
 /// A terminal session's remote shell exited or its connection dropped (tech-gui.md
@@ -124,50 +109,6 @@ pub struct FilePreview {
 /// routed to its owning session via `transfer_owner` (§3.4/§4.1).
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type, tauri_specta::Event)]
 pub struct TransferProgress(pub TransferProgressDto);
-
-/// A progress step of an auto key-setup run (tech-gui.md §4.3). Mapped by the shared
-/// engine bridge from `CoreEvent::KeySetupProgress`; the host name identifies the run.
-#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, tauri_specta::Event)]
-#[serde(rename_all = "camelCase")]
-pub struct KeySetupProgress {
-    pub host_name: String,
-    pub step: KeySetupStepDto,
-}
-
-/// Key setup finished successfully — key auth is configured (tech-gui.md §4.3).
-/// `keyPath` is the generated private-key path (a path, never key material, §3.4).
-#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, tauri_specta::Event)]
-#[serde(rename_all = "camelCase")]
-pub struct KeySetupComplete {
-    pub host_name: String,
-    pub key_path: String,
-}
-
-/// Key setup failed before touching the server's auth config (tech-gui.md §4.3).
-/// Password authentication is never disabled unless a key was verified first.
-#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, tauri_specta::Event)]
-#[serde(rename_all = "camelCase")]
-pub struct KeySetupFailed {
-    pub host_name: String,
-    pub error: String,
-}
-
-/// Key setup rolled the server's sshd config back after a late failure (tech-gui.md
-/// §4.3). `result` is the human-readable rollback outcome.
-#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, tauri_specta::Event)]
-#[serde(rename_all = "camelCase")]
-pub struct KeySetupRollback {
-    pub host_name: String,
-    pub result: String,
-}
-
-/// A newer release was found by the startup check (tech-gui.md §4.3). Mapped by the
-/// shared engine bridge from `CoreEvent::UpdateAvailable`; drives the update banner.
-#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, tauri_specta::Event)]
-#[serde(rename_all = "camelCase")]
-pub struct UpdateAvailable {
-    pub info: UpdateInfoDto,
-}
 
 /// A background error surfaced to the user.
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type, tauri_specta::Event)]

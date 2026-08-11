@@ -96,6 +96,15 @@ export function isPaletteChord(e: KeyboardEvent): boolean {
   return (e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K');
 }
 
+/** Close the active desktop session tab on macOS. Keep Ctrl+W available to the
+ *  remote shell, where readline uses it to erase the previous word. Shift+⌘W also
+ *  stays untouched because macOS conventionally reserves it for closing a window
+ *  group rather than one tab. */
+export function isCloseSessionChord(e: KeyboardEvent): boolean {
+  if (e.repeat || e.altKey || e.shiftKey || e.ctrlKey || e.isComposing) return false;
+  return e.metaKey && (e.key === 'w' || e.key === 'W');
+}
+
 /** The dashboard metric-refresh hotkey (mirrors the TUI's `r`): a bare r/R with no
  *  modifier, ignored while typing in an editable surface so it never eats a keystroke.
  *  Terminal input is never disrupted because the dashboard — the only mounter of this

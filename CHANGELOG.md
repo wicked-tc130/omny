@@ -7,6 +7,24 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## Unreleased
+
+### Features
+- **The customized desktop app is now named Omny.** Its macOS bundle, executable, window title, and visible interface branding use the shorter name while continuing to read the existing OmnySSH configuration directory.
+- **Per-host terminal startup commands.** A host can now send a configured command immediately after its interactive shell opens, enabling nested SSH and privilege-switch workflows on bastions that prohibit `ProxyJump` forwarding. Dashboard metrics and SFTP continue to target the configured host itself.
+- **Dashboard cards can be reordered by drag and drop.** A dedicated grip moves cards, and the preferred order persists across app restarts while new hosts append naturally.
+- **The desktop UI is focused on local operations.** Upstream update checks, update settings/banner, About Omny, the automatic SSH-key setup flow, and the redundant Snippets/Terminal sidebar entries are removed. Terminal sessions remain available from each host card's `sh` action.
+- **SSH and SFTP are peer navigation actions.** The SSH host picker now sits directly below SFTP in the sidebar, while Settings and theme switching share the footer in that order.
+
+### Bug Fixes
+- **Desktop terminal output now renders reliably on macOS WebKit.** PTY chunks use Tauri's portable serialized byte-array channel instead of the raw `ArrayBuffer` response path that could silently deliver no output. The output route is registered before the SSH task starts, and output that beats `terminalOpen` is held backend-side until xterm explicitly acknowledges readiness, then flushed in order and refreshed, so a fast quiet shell's first prompt appears immediately.
+- **Command+W closes the active desktop session tab.** On macOS, using the standard close-tab shortcut inside a terminal or SFTP session now closes only that session instead of the entire Omny window. Shell Ctrl+W remains available for readline word deletion.
+- **Manual hosts can now be renamed from Edit host.** Renames are persisted atomically, keep saved credentials and key-setup metadata, retain Dashboard ordering, and reject duplicate names instead of creating a second host.
+- **The same host can now have multiple terminal tabs.** Every `sh` click opens an independent SSH session, while SFTP remains single-instance per host. Closing the active tab selects a neighbouring session when one exists.
+- **Repeated `sh` clicks recover cleanly.** A live or connecting tab is reactivated instead of duplicated, while a failed tab is replaced with a fresh connection attempt.
+
+---
+
 ## 1.1.1 — 2026-07-28
 
 ### Bug Fixes

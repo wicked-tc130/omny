@@ -7,15 +7,16 @@
   import Sidebar from './Sidebar.svelte';
   import StatusBar from './StatusBar.svelte';
   import CommandPalette from './CommandPalette.svelte';
-  import SupportModal from './SupportModal.svelte';
-  import KeySetupProgress from '$lib/screens/KeySetupProgress.svelte';
-  import UpdateBanner from './UpdateBanner.svelte';
-  import { support } from '$lib/stores/support';
-  import { sidebarCollapsed, isCollapseChord } from '$lib/stores/ui';
+  import { sidebarCollapsed, isCollapseChord, isCloseSessionChord } from '$lib/stores/ui';
+  import { closeActiveSession } from '$lib/stores/navigation';
 
   let { children }: { children: Snippet } = $props();
 
   function onKeydown(e: KeyboardEvent): void {
+    if (isCloseSessionChord(e) && closeActiveSession()) {
+      e.preventDefault();
+      return;
+    }
     if (isCollapseChord(e)) {
       e.preventDefault();
       sidebarCollapsed.toggle();
@@ -39,9 +40,4 @@
   </main>
   <StatusBar />
   <CommandPalette />
-  {#if $support}
-    <SupportModal />
-  {/if}
-  <KeySetupProgress />
-  <UpdateBanner />
 </div>

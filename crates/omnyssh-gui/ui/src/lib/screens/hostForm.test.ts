@@ -78,18 +78,29 @@ describe('formToInput — mirrors the TUI to_host', () => {
   });
 
   it('drops blank optionals to undefined so the wire form stays sparse', () => {
-    const r = formToInput(fields({ name: 'n', hostname: 'h', identityFile: '  ', password: '', notes: ' ' }));
+    const r = formToInput(
+      fields({ name: 'n', hostname: 'h', identityFile: '  ', password: '', startupCommand: ' ', notes: ' ' })
+    );
     expect(r.ok && r.input.identityFile).toBeUndefined();
     expect(r.ok && r.input.password).toBeUndefined();
+    expect(r.ok && r.input.startupCommand).toBeUndefined();
     expect(r.ok && r.input.notes).toBeUndefined();
   });
 
   it('keeps identity/password/notes when provided', () => {
     const r = formToInput(
-      fields({ name: 'n', hostname: 'h', identityFile: '~/.ssh/id', password: 's3cret', notes: 'prod box' })
+      fields({
+        name: 'n',
+        hostname: 'h',
+        identityFile: '~/.ssh/id',
+        password: 's3cret',
+        startupCommand: "ssh -tt app@10.0.0.2 'sudo -iu developer'",
+        notes: 'prod box'
+      })
     );
     expect(r.ok && r.input.identityFile).toBe('~/.ssh/id');
     expect(r.ok && r.input.password).toBe('s3cret');
+    expect(r.ok && r.input.startupCommand).toBe("ssh -tt app@10.0.0.2 'sudo -iu developer'");
     expect(r.ok && r.input.notes).toBe('prod box');
   });
 
@@ -101,11 +112,22 @@ describe('formToInput — mirrors the TUI to_host', () => {
 
 describe('formFromHost', () => {
   it('seeds the editable fields and leaves secrets blank (the DTO omits them)', () => {
-    const f = formFromHost(host({ name: 'db', hostname: '10.0.0.2', user: 'root', port: 2200, tags: ['prod', 'db'], notes: 'primary' }));
+    const f = formFromHost(
+      host({
+        name: 'db',
+        hostname: '10.0.0.2',
+        user: 'root',
+        port: 2200,
+        startupCommand: 'ssh nested',
+        tags: ['prod', 'db'],
+        notes: 'primary'
+      })
+    );
     expect(f.name).toBe('db');
     expect(f.hostname).toBe('10.0.0.2');
     expect(f.user).toBe('root');
     expect(f.port).toBe('2200');
+    expect(f.startupCommand).toBe('ssh nested');
     expect(f.tags).toBe('prod, db');
     expect(f.notes).toBe('primary');
     // Backend-only fields are never shown — blank means "keep the stored value".
@@ -114,7 +136,15 @@ describe('formFromHost', () => {
   });
 
   it('round-trips the observable fields back through formToInput', () => {
-    const original = host({ name: 'db', hostname: '10.0.0.2', user: 'root', port: 2200, tags: ['ops'], notes: 'x' });
+    const original = host({
+      name: 'db',
+      hostname: '10.0.0.2',
+      user: 'root',
+      port: 2200,
+      startupCommand: 'ssh nested',
+      tags: ['ops'],
+      notes: 'x'
+    });
     const r = formToInput(formFromHost(original));
     expect(r.ok && r.input).toEqual({
       name: 'db',
@@ -123,6 +153,7 @@ describe('formFromHost', () => {
       port: 2200,
       identityFile: undefined,
       password: undefined,
+      startupCommand: 'ssh nested',
       tags: ['ops'],
       notes: 'x'
     });

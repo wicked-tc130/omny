@@ -7,10 +7,7 @@ import type {
   FileEntryDto,
   HostDto,
   HostInputDto,
-  SnippetDto,
-  TerminalBytes,
-  UpdateConfigDto,
-  UpdateInfoDto
+  TerminalBytes
 } from '$lib/bindings';
 
 export async function listHosts(): Promise<HostDto[]> {
@@ -25,9 +22,10 @@ export async function reloadHosts(): Promise<void> {
   if (res.status === 'error') throw new Error(res.error.message);
 }
 
-/** Add or edit a manual host in `hosts.toml`. Call `reloadHosts` after to refresh. */
-export async function saveHost(input: HostInputDto): Promise<void> {
-  const res = await commands.saveHost(input);
+/** Add, edit, or rename a manual host in `hosts.toml`. `previousName` makes an edit
+ *  atomic and lets the backend preserve fields omitted from the public DTO. */
+export async function saveHost(input: HostInputDto, previousName?: string): Promise<void> {
+  const res = await commands.saveHost(input, previousName ?? null);
   if (res.status === 'error') throw new Error(res.error.message);
 }
 
@@ -37,36 +35,7 @@ export async function deleteHost(name: string): Promise<void> {
   if (res.status === 'error') throw new Error(res.error.message);
 }
 
-/** Read the saved snippets from the shared `snippets.toml`. */
-export async function listSnippets(): Promise<SnippetDto[]> {
-  const res = await commands.listSnippets();
-  if (res.status === 'error') throw new Error(res.error.message);
-  return res.data;
-}
-
-/** Upsert one snippet by name and persist the whole list. */
-export async function saveSnippet(snippet: SnippetDto): Promise<void> {
-  const res = await commands.saveSnippet(snippet);
-  if (res.status === 'error') throw new Error(res.error.message);
-}
-
-/** Delete the snippet named `name` and persist. */
-export async function deleteSnippet(name: string): Promise<void> {
-  const res = await commands.deleteSnippet(name);
-  if (res.status === 'error') throw new Error(res.error.message);
-}
-
-/** Run a snippet on one or more hosts; results arrive as `snippet-result` events. */
-export async function executeSnippet(
-  snippetName: string,
-  hostNames: string[],
-  params: Record<string, string>
-): Promise<void> {
-  const res = await commands.executeSnippet(snippetName, hostNames, params);
-  if (res.status === 'error') throw new Error(res.error.message);
-}
-
-/** Open a terminal for `hostName`, streaming raw output into `onOutput`; returns the
+/** Open a terminal for `hostName`, streaming byte output into `onOutput`; returns the
  *  public session id used by the write/resize/close wrappers (tech-gui.md §3.3/§4.2). */
 export async function terminalOpen(
   hostName: string,
@@ -77,6 +46,12 @@ export async function terminalOpen(
   const res = await commands.terminalOpen(hostName, cols, rows, onOutput);
   if (res.status === 'error') throw new Error(res.error.message);
   return res.data;
+}
+
+/** Release PTY output buffered while `terminalOpen` was returning. */
+export async function terminalReady(sessionId: number): Promise<void> {
+  const res = await commands.terminalReady(sessionId);
+  if (res.status === 'error') throw new Error(res.error.message);
 }
 
 /** Send keystrokes (UTF-8 bytes) to a terminal. */
@@ -171,42 +146,8 @@ export async function previewLocalFile(path: string): Promise<string> {
   return res.data;
 }
 
-/** Start auto SSH-key setup for a host; progress + the outcome arrive as `key-setup-*`
- *  events (tech-gui.md §4.2). Fire-and-forget — only an unknown host rejects here. */
-export async function startKeySetup(hostName: string): Promise<void> {
-  const res = await commands.startKeySetup(hostName);
-  if (res.status === 'error') throw new Error(res.error.message);
-}
-
 /** Force an immediate metric poll of every host (tech-gui.md §4.2). */
 export async function refreshMetrics(): Promise<void> {
   const res = await commands.refreshMetrics();
-  if (res.status === 'error') throw new Error(res.error.message);
-}
-
-/** Check GitHub for a newer release; `null` means up to date (tech-gui.md §4.2). */
-export async function checkUpdate(): Promise<UpdateInfoDto | null> {
-  const res = await commands.checkUpdate();
-  if (res.status === 'error') throw new Error(res.error.message);
-  return res.data;
-}
-
-/** Download and install the latest desktop bundle (tech-gui.md §4.3). Fully wired once
- *  Stage 5 configures the updater endpoints; until then it reports "not available yet". */
-export async function installUpdate(): Promise<void> {
-  const res = await commands.installUpdate();
-  if (res.status === 'error') throw new Error(res.error.message);
-}
-
-/** Read the update-checker preferences from the shared config (tech-gui.md §4.3). */
-export async function loadUpdateConfig(): Promise<UpdateConfigDto> {
-  const res = await commands.loadUpdateConfig();
-  if (res.status === 'error') throw new Error(res.error.message);
-  return res.data;
-}
-
-/** Persist the update-checker preferences to the shared config (tech-gui.md §4.3). */
-export async function saveUpdateConfig(config: UpdateConfigDto): Promise<void> {
-  const res = await commands.saveUpdateConfig(config);
   if (res.status === 'error') throw new Error(res.error.message);
 }

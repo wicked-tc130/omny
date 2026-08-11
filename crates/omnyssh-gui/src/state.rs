@@ -4,7 +4,7 @@
 //! the core's inner handles. The shared engine channel feeds the bridge.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, RwLock};
 use std::time::Duration;
 
@@ -21,6 +21,15 @@ use crate::dto::{HostDto, TerminalBytes};
 /// Metric poll cadence. Mirrors the TUI's fixed interval; a configurable refresh
 /// interval lands with settings in Stage 4.3 (tech-gui.md §4.3).
 const POLL_INTERVAL: Duration = Duration::from_secs(30);
+
+/// One terminal's output route. A fast server can emit its banner and prompt while
+/// the `terminal_open` IPC response is still crossing macOS WebKit. Hold those bytes
+/// until the frontend acknowledges that xterm and the returned session id are ready.
+struct TerminalRoute {
+    channel: Channel<TerminalBytes>,
+    pending: Vec<Vec<u8>>,
+    ready: bool,
+}
 
 /// Maps frontend-facing **public** session ids to the core's **inner** handles, and
 /// back for terminals (the bridge labels `terminal-exited` by inner PTY id, §3.4).
@@ -77,21 +86,14 @@ pub struct GuiState {
     poll: Mutex<Option<PollManager>>,
     /// All terminal sessions; constructed with the raw-byte tap (§3.6).
     pty: Mutex<PtyManager>,
-    /// Terminal output routing: PTY inner id -> that tab's frontend channel.
-    term_channels: Mutex<HashMap<SessionId, Channel<TerminalBytes>>>,
+    /// Terminal output routing: PTY inner id -> channel plus pre-ready buffer.
+    term_channels: Mutex<HashMap<SessionId, TerminalRoute>>,
     /// One SFTP manager per tab, keyed by its public session id (§3.4).
     sftp: Mutex<HashMap<SessionId, SftpManager>>,
     /// SFTP progress routing: GUI-allocated transfer id -> owning session (§3.4).
     transfer_owner: Mutex<HashMap<TransferId, SessionId>>,
     /// Monotonic source for GUI-allocated transfer ids (§3.4).
     next_transfer_id: AtomicU64,
-    /// One-shot latch so the startup update check fires once, on the frontend's first
-    /// `reload_hosts` — i.e. only after its event bridge is listening (§3.4).
-    update_check_started: AtomicBool,
-    /// The host with a key-setup in flight, if any. One run at a time, mirroring the
-    /// TUI's single-popup model — a second run would race a second `hosts.toml` write
-    /// and clobber the progress panel (§4.2).
-    key_setup: Mutex<Option<String>>,
     /// Public id <-> inner handle mapping for all sessions.
     sessions: Mutex<SessionRegistry>,
     /// Shared engine channel the bridge drains; cloned to `PollManager`/`PtyManager`.
@@ -108,8 +110,6 @@ impl GuiState {
             sftp: Mutex::new(HashMap::new()),
             transfer_owner: Mutex::new(HashMap::new()),
             next_transfer_id: AtomicU64::new(0),
-            update_check_started: AtomicBool::new(false),
-            key_setup: Mutex::new(None),
             sessions: Mutex::new(SessionRegistry::default()),
             engine_tx,
         }
@@ -120,13 +120,6 @@ impl GuiState {
         *self.hosts.write().expect("hosts lock poisoned") = hosts;
     }
 
-    /// Clone the shared engine sender for a command that drives the core directly and
-    /// reports via `CoreEvent` on the bridge — key setup (§4.2) and the startup update
-    /// check (§4.3). Same channel the pollers and PTY sessions use (§3.4).
-    pub fn engine_sender(&self) -> mpsc::Sender<CoreEvent> {
-        self.engine_tx.clone()
-    }
-
     /// Snapshot the cached hosts as wire DTOs (secret fields dropped by the map).
     pub fn host_dtos(&self) -> Vec<HostDto> {
         self.hosts
@@ -134,17 +127,6 @@ impl GuiState {
             .expect("hosts lock poisoned")
             .iter()
             .map(HostDto::from)
-            .collect()
-    }
-
-    /// Resolve `names` to their full `Host` records for a backend-only op (snippet
-    /// execute, key setup). Secret material rides along here and never crosses the
-    /// IPC boundary. Unknown names are skipped; order follows `names`.
-    pub fn hosts_by_name(&self, names: &[String]) -> Vec<Host> {
-        let hosts = self.hosts.read().expect("hosts lock poisoned");
-        names
-            .iter()
-            .filter_map(|name| hosts.iter().find(|h| &h.name == name).cloned())
             .collect()
     }
 
@@ -167,33 +149,6 @@ impl GuiState {
         }
     }
 
-    /// Reserve the single key-setup slot for `host`. `Ok` starts the run; `Err` names the
-    /// host already running one, so a concurrent start is rejected instead of racing a
-    /// second `hosts.toml` write and clobbering the progress panel (§4.2). Paired with
-    /// `end_key_setup`, called on every terminal outcome of the run.
-    pub fn try_begin_key_setup(&self, host: &str) -> Result<(), String> {
-        let mut slot = self.key_setup.lock().expect("key_setup lock poisoned");
-        if let Some(active) = slot.as_ref() {
-            return Err(format!("Key setup is already running for '{active}'"));
-        }
-        *slot = Some(host.to_string());
-        Ok(())
-    }
-
-    /// Release the key-setup slot when a run reaches any terminal outcome.
-    pub fn end_key_setup(&self) {
-        *self.key_setup.lock().expect("key_setup lock poisoned") = None;
-    }
-
-    /// Claim the one-shot startup update check: `true` exactly once, on the first call.
-    /// Driven from `reload_hosts` so the check runs only after the frontend's event
-    /// bridge is listening, never dropping `update-available` on a listener race (§3.4).
-    pub fn claim_update_check(&self) -> bool {
-        self.update_check_started
-            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-            .is_ok()
-    }
-
     /// Start (or restart) the pollers for the cached hosts. Must run inside the
     /// Tauri async runtime — `PollManager::start` spawns tokio tasks (§3.4).
     pub fn restart_pollers(&self) {
@@ -210,9 +165,9 @@ impl GuiState {
     }
 
     /// Open a terminal for `host_name`, wiring its raw-output `channel`, and return
-    /// the public session id. The session task starts here but cannot emit output
-    /// until it connects, so registering the channel right after `open` beats the
-    /// first byte (§3.4). Locks are taken un-nested to stay deadlock-free.
+    /// the public session id. The core invokes the registration hook before spawning
+    /// the SSH task, so even a fast server cannot emit its first bytes before the
+    /// route and public-id mapping exist (§3.4).
     pub fn open_terminal(
         &self,
         host_name: &str,
@@ -228,21 +183,31 @@ impl GuiState {
             .find(|h| h.name == host_name)
             .cloned()
             .ok_or_else(|| format!("unknown host '{host_name}'"))?;
-        let inner = self
-            .pty
+        let mut public = None;
+        self.pty
             .lock()
             .expect("pty lock poisoned")
-            .open(&host, cols, rows, self.engine_tx.clone())
+            .open_with_registration(&host, cols, rows, self.engine_tx.clone(), |inner| {
+                self.term_channels
+                    .lock()
+                    .expect("term_channels lock poisoned")
+                    .insert(
+                        inner,
+                        TerminalRoute {
+                            channel,
+                            pending: Vec::new(),
+                            ready: false,
+                        },
+                    );
+                public = Some(
+                    self.sessions
+                        .lock()
+                        .expect("sessions lock poisoned")
+                        .register_terminal(inner),
+                );
+            })
             .map_err(|e| e.to_string())?;
-        self.term_channels
-            .lock()
-            .expect("term_channels lock poisoned")
-            .insert(inner, channel);
-        Ok(self
-            .sessions
-            .lock()
-            .expect("sessions lock poisoned")
-            .register_terminal(inner))
+        Ok(public.expect("successful terminal open must register its public id"))
     }
 
     /// Resolve a public id to its live PTY inner id and run `f` on the manager. The
@@ -274,6 +239,30 @@ impl GuiState {
         });
     }
 
+    /// Release output buffered while `terminal_open` was returning. Sends happen
+    /// under the route lock so newly arriving PTY chunks cannot overtake the prompt.
+    pub fn ready_terminal(&self, public: SessionId) {
+        let inner = self
+            .sessions
+            .lock()
+            .expect("sessions lock poisoned")
+            .pty_inner(public);
+        let Some(inner) = inner else {
+            return;
+        };
+        let mut routes = self
+            .term_channels
+            .lock()
+            .expect("term_channels lock poisoned");
+        let Some(route) = routes.get_mut(&inner) else {
+            return;
+        };
+        route.ready = true;
+        for bytes in route.pending.drain(..) {
+            let _ = route.channel.send(TerminalBytes(bytes));
+        }
+    }
+
     /// User-initiated close: tear down the core session and drop its routing state,
     /// so the task's later `PtyExited` finds no mapping and emits no `terminal-exited`
     /// (the frontend already tore the tab down, §3.4).
@@ -295,14 +284,16 @@ impl GuiState {
     /// Route a raw PTY chunk (keyed by inner id) into its tab's channel. Called by
     /// the raw-output forwarder; unknown/closed ids are dropped (§3.6).
     pub fn send_terminal_output(&self, inner: SessionId, bytes: Vec<u8>) {
-        let channel = self
+        let mut routes = self
             .term_channels
             .lock()
-            .expect("term_channels lock poisoned")
-            .get(&inner)
-            .cloned();
-        if let Some(channel) = channel {
-            let _ = channel.send(TerminalBytes(bytes));
+            .expect("term_channels lock poisoned");
+        if let Some(route) = routes.get_mut(&inner) {
+            if route.ready {
+                let _ = route.channel.send(TerminalBytes(bytes));
+            } else {
+                route.pending.push(bytes);
+            }
         }
     }
 
@@ -524,35 +515,32 @@ mod tests {
         assert!(state.pty.lock().unwrap().parser_for(inner).is_none());
     }
 
-    #[test]
-    fn key_setup_runs_one_at_a_time() {
-        // A second start while one is in flight is rejected (no racing hosts.toml write /
-        // panel clobber); the slot frees on the terminal outcome so a retry succeeds (§4.2).
+    #[tokio::test]
+    async fn terminal_output_waits_for_frontend_ready_ack() {
         let (engine_tx, _engine_rx) = mpsc::channel::<CoreEvent>(8);
         let state = GuiState::new(engine_tx, PtyManager::new());
+        state.set_hosts(vec![Host {
+            name: "h".to_string(),
+            ..Host::default()
+        }]);
+        let public = state
+            .open_terminal("h", 80, 24, Channel::new(|_| Ok(())))
+            .unwrap();
+        let inner = state.sessions.lock().unwrap().pty_inner(public).unwrap();
 
-        assert!(state.try_begin_key_setup("web-1").is_ok());
-        let busy = state.try_begin_key_setup("web-2").unwrap_err();
-        assert!(
-            busy.contains("web-1"),
-            "rejection names the busy host: {busy}"
-        );
-        // The same host cannot double-start either.
-        assert!(state.try_begin_key_setup("web-1").is_err());
+        state.send_terminal_output(inner, b"prompt".to_vec());
+        {
+            let routes = state.term_channels.lock().unwrap();
+            let route = routes.get(&inner).unwrap();
+            assert!(!route.ready);
+            assert_eq!(route.pending, vec![b"prompt".to_vec()]);
+        }
 
-        state.end_key_setup();
-        assert!(state.try_begin_key_setup("web-2").is_ok());
-    }
-
-    #[test]
-    fn update_check_is_claimed_exactly_once() {
-        // The startup update check must fire once (the first reload), never again — so a
-        // later `reload_hosts` (after a host edit) does not re-hit GitHub (§3.4).
-        let (engine_tx, _engine_rx) = mpsc::channel::<CoreEvent>(8);
-        let state = GuiState::new(engine_tx, PtyManager::new());
-        assert!(state.claim_update_check());
-        assert!(!state.claim_update_check());
-        assert!(!state.claim_update_check());
+        state.ready_terminal(public);
+        let routes = state.term_channels.lock().unwrap();
+        let route = routes.get(&inner).unwrap();
+        assert!(route.ready);
+        assert!(route.pending.is_empty());
     }
 
     #[test]

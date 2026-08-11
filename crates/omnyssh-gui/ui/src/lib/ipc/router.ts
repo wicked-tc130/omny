@@ -6,37 +6,22 @@ import type {
   ConnectionStatusDto,
   FilePreview,
   HostDto,
-  KeySetupComplete,
-  KeySetupFailed,
-  KeySetupProgress,
-  KeySetupRollback,
   MetricsDto,
   ServiceDto,
   SftpConnected,
   SftpDirListed,
   SftpDisconnected,
   SftpOpDone,
-  SnippetResult,
   TransferProgressDto
 } from '$lib/bindings';
 import { hosts } from '$lib/stores/hosts';
 import { statuses } from '$lib/stores/statuses';
 import { metrics, mergeMetrics } from '$lib/stores/metrics';
 import { services } from '$lib/stores/services';
-import { snippetRun, reduceRunResult } from '$lib/stores/snippets';
 import { sessions } from '$lib/stores/sessions';
 import { sftp } from '$lib/stores/sftp';
 import { closeSession } from '$lib/stores/navigation';
 import { lastError } from '$lib/stores/notifications';
-import {
-  keySetup,
-  reduceComplete,
-  reduceFailed,
-  reduceProgress,
-  reduceRollback
-} from '$lib/stores/keySetup';
-import { offerUpdate } from '$lib/stores/update';
-import type { UpdateAvailable } from '$lib/bindings';
 
 export function applyHostsLoaded(payload: HostDto[]): void {
   hosts.set(payload);
@@ -68,10 +53,6 @@ export function applyServicesDetected(payload: { hostName: string; services: Ser
 
 export function applyServicesFailed(payload: { hostName: string; message: string }): void {
   services.update((m) => new Map(m).set(payload.hostName, { kind: 'failed', message: payload.message }));
-}
-
-export function applySnippetResult(payload: SnippetResult): void {
-  snippetRun.update((run) => reduceRunResult(run, payload));
 }
 
 // A terminal's remote shell exited or its connection dropped (tech-gui.md §3.4). The
@@ -122,31 +103,6 @@ export function applyFilePreview(payload: FilePreview): void {
 
 export function applyTransferProgress(payload: TransferProgressDto): void {
   sftp.progress(payload.sessionId, payload);
-}
-
-// Auto key-setup events (tech-gui.md §4.2/§4.3). Progress advances only the active
-// host's run; a terminal outcome always shows for its host. The card refresh on
-// completion is driven by the progress panel component (an ipc call), so this stays a
-// pure store update.
-export function applyKeySetupProgress(payload: KeySetupProgress): void {
-  keySetup.update((run) => reduceProgress(run, payload.hostName, payload.step));
-}
-
-export function applyKeySetupComplete(payload: KeySetupComplete): void {
-  keySetup.set(reduceComplete(payload.hostName, payload.keyPath));
-}
-
-export function applyKeySetupFailed(payload: KeySetupFailed): void {
-  keySetup.set(reduceFailed(payload.hostName, payload.error));
-}
-
-export function applyKeySetupRollback(payload: KeySetupRollback): void {
-  keySetup.set(reduceRollback(payload.hostName, payload.result));
-}
-
-// A newer release found by the startup check (tech-gui.md §4.3) → the update banner.
-export function applyUpdateAvailable(payload: UpdateAvailable): void {
-  offerUpdate(payload.info);
 }
 
 export function applyError(message: string): void {

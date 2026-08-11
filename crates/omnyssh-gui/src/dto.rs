@@ -4,15 +4,11 @@
 
 use serde::{Deserialize, Serialize};
 
-use omnyssh_core::config::app_config::UpdateConfig;
-use omnyssh_core::config::snippets::{Snippet, SnippetScope};
 use omnyssh_core::event::{
     DetectedService, MetricValue, Metrics, ProcessInfo, ServiceKind, ServiceMetric,
 };
 use omnyssh_core::ssh::client::{ConnectionStatus, Host, HostSource};
-use omnyssh_core::ssh::key_setup::KeySetupStep;
 use omnyssh_core::ssh::sftp::FileEntry;
-use omnyssh_core::update::UpdateInfo;
 
 /// Host origin, mirrors `omnyssh_core::ssh::client::HostSource`.
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
@@ -32,13 +28,13 @@ pub struct HostDto {
     pub hostname: String,
     pub user: String,
     pub port: u16,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub startup_command: Option<String>,
     pub tags: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub notes: Option<String>,
     pub source: HostSourceDto,
     pub has_key: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub password_auth_disabled: Option<bool>,
 }
 
 /// Inbound host form payload for `save_host` (tech-gui.md §4.1, Stage 4.1). Builds a
@@ -59,6 +55,8 @@ pub struct HostInputDto {
     pub password: Option<String>,
     #[serde(default)]
     pub proxy_jump: Option<String>,
+    #[serde(default)]
+    pub startup_command: Option<String>,
     // `tags[]` is required on the wire (tech-gui.md §4.1); the form always sends an
     // array, so no `serde(default)` — that would emit an optional `tags?` and drift.
     pub tags: Vec<String>,
@@ -138,33 +136,6 @@ pub struct ServiceDto {
     pub metrics: Vec<ServiceMetricDto>,
 }
 
-/// Snippet scope, mirrors `omnyssh_core::config::snippets::SnippetScope`. Wire
-/// names are lowercase (`global`, `host`).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
-#[serde(rename_all = "lowercase")]
-pub enum SnippetScopeDto {
-    Global,
-    Host,
-}
-
-/// A saved command snippet as the frontend sees it (tech-gui.md §4.1). Crosses the
-/// boundary both ways — outbound for `list_snippets`, inbound for `save_snippet` —
-/// so it derives `Deserialize` too. Optional fields are omitted when absent, matching
-/// the sparse `snippets.toml` the TUI writes.
-#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
-#[serde(rename_all = "camelCase")]
-pub struct SnippetDto {
-    pub name: String,
-    pub command: String,
-    pub scope: SnippetScopeDto,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub host: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tags: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub params: Option<Vec<String>>,
-}
-
 /// A file or directory in an SFTP panel listing (tech-gui.md §4.1). Maps from the
 /// core `FileEntry`; `path` is the absolute path the frontend marks entries by.
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
@@ -189,53 +160,13 @@ pub struct TransferProgressDto {
     pub total: u64,
 }
 
-/// A newer release the app can offer (tech-gui.md §4.1). `version` is the latest
-/// version (no leading `v`); `url` is the release page; `canSelfUpdate` mirrors the
-/// core's self-update eligibility. The core `UpdateInfo` has no release-notes field, so
-/// none is invented (§4.1).
-#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
-#[serde(rename_all = "camelCase")]
-pub struct UpdateInfoDto {
-    pub version: String,
-    pub url: String,
-    pub tag: String,
-    pub can_self_update: bool,
-}
-
-/// Update-checker preferences, mirrors core `UpdateConfig` (tech-gui.md §4.3). Crosses
-/// both ways: outbound for the settings screen, inbound for `save_update_config`.
-#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
-#[serde(rename_all = "camelCase")]
-pub struct UpdateConfigDto {
-    pub check_on_startup: bool,
-    pub skip_version: String,
-}
-
-/// One step of the auto key-setup flow, for the progress view (tech-gui.md §4.2/§4.3).
-/// `index` is 1-based (`1..=total`); `description` is the core's human-readable label.
-/// Maps from the core `KeySetupStep`.
-#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
-#[serde(rename_all = "camelCase")]
-pub struct KeySetupStepDto {
-    pub index: u8,
-    pub total: u8,
-    pub description: String,
-}
-
-/// Raw PTY output bytes for a terminal session's per-session `Channel` (tech-gui.md
-/// §3.3/§3.6). Deliberately **not** `Serialize`: that dodges the blanket
-/// `Serialize -> IpcResponse` mapping (which would JSON-encode to a slow `number[]`),
-/// so the bytes ride the channel as a raw `ArrayBuffer` that xterm writes directly.
-/// Only ever sent, never received — the sole non-DTO on the boundary.
-#[derive(specta::Type)]
+/// PTY output bytes for a terminal session's per-session `Channel` (tech-gui.md
+/// §3.3/§3.6). Serialized transparently as `number[]`: this is slightly less compact
+/// than a raw `ArrayBuffer`, but works consistently across Tauri/WebKit versions.
+#[derive(Serialize, specta::Type)]
+#[serde(transparent)]
 #[specta(transparent)]
 pub struct TerminalBytes(pub Vec<u8>);
-
-impl tauri::ipc::IpcResponse for TerminalBytes {
-    fn body(self) -> tauri::Result<tauri::ipc::InvokeResponseBody> {
-        Ok(tauri::ipc::InvokeResponseBody::Raw(self.0))
-    }
-}
 
 impl From<&HostSource> for HostSourceDto {
     fn from(source: &HostSource) -> Self {
@@ -253,11 +184,11 @@ impl From<&Host> for HostDto {
             hostname: host.hostname.clone(),
             user: host.user.clone(),
             port: host.port,
+            startup_command: host.startup_command.clone(),
             tags: host.tags.clone(),
             notes: host.notes.clone(),
             source: (&host.source).into(),
             has_key: host.identity_file.is_some(),
-            password_auth_disabled: host.password_auth_disabled,
         }
     }
 }
@@ -266,9 +197,8 @@ impl From<HostInputDto> for Host {
     /// Build a **manual** host from the form payload (tech-gui.md §4.1, Stage 4.1).
     /// `source` is forced to `Manual` (the form only ever authors manual entries);
     /// blank optional fields collapse to `None` so an empty identity path never reads
-    /// as `hasKey` and an empty password is not persisted. Key-setup metadata
-    /// (`password_auth_disabled`, `key_setup_date`) and the SSH-config rename origin
-    /// are not the form's to set — `save_host` carries them over across an edit.
+    /// as `hasKey` and an empty password is not persisted. Internal metadata is not
+    /// accepted from the webview.
     fn from(dto: HostInputDto) -> Self {
         // The frontend already trims; collapse an exact-empty string to `None` as a
         // last guard. Password is not trimmed — its bytes are preserved verbatim.
@@ -281,6 +211,7 @@ impl From<HostInputDto> for Host {
             identity_file: non_empty(dto.identity_file),
             password: non_empty(dto.password),
             proxy_jump: non_empty(dto.proxy_jump),
+            startup_command: non_empty(dto.startup_command),
             tags: dto.tags,
             notes: non_empty(dto.notes),
             source: HostSource::Manual,
@@ -366,50 +297,6 @@ impl From<&DetectedService> for ServiceDto {
     }
 }
 
-impl From<&SnippetScope> for SnippetScopeDto {
-    fn from(scope: &SnippetScope) -> Self {
-        match scope {
-            SnippetScope::Global => Self::Global,
-            SnippetScope::Host => Self::Host,
-        }
-    }
-}
-
-impl From<&SnippetScopeDto> for SnippetScope {
-    fn from(scope: &SnippetScopeDto) -> Self {
-        match scope {
-            SnippetScopeDto::Global => Self::Global,
-            SnippetScopeDto::Host => Self::Host,
-        }
-    }
-}
-
-impl From<&Snippet> for SnippetDto {
-    fn from(snippet: &Snippet) -> Self {
-        Self {
-            name: snippet.name.clone(),
-            command: snippet.command.clone(),
-            scope: (&snippet.scope).into(),
-            host: snippet.host.clone(),
-            tags: snippet.tags.clone(),
-            params: snippet.params.clone(),
-        }
-    }
-}
-
-impl From<SnippetDto> for Snippet {
-    fn from(dto: SnippetDto) -> Self {
-        Self {
-            name: dto.name,
-            command: dto.command,
-            scope: (&dto.scope).into(),
-            host: dto.host,
-            tags: dto.tags,
-            params: dto.params,
-        }
-    }
-}
-
 impl From<&FileEntry> for FileEntryDto {
     fn from(entry: &FileEntry) -> Self {
         Self {
@@ -417,47 +304,6 @@ impl From<&FileEntry> for FileEntryDto {
             path: entry.path.clone(),
             size: entry.size,
             is_dir: entry.is_dir,
-        }
-    }
-}
-
-impl From<&UpdateInfo> for UpdateInfoDto {
-    fn from(info: &UpdateInfo) -> Self {
-        Self {
-            version: info.latest.clone(),
-            url: info.release_url(),
-            tag: info.tag.clone(),
-            can_self_update: info.can_self_update,
-        }
-    }
-}
-
-impl From<&UpdateConfig> for UpdateConfigDto {
-    fn from(config: &UpdateConfig) -> Self {
-        Self {
-            check_on_startup: config.check_on_startup,
-            skip_version: config.skip_version.clone(),
-        }
-    }
-}
-
-impl From<UpdateConfigDto> for UpdateConfig {
-    fn from(dto: UpdateConfigDto) -> Self {
-        Self {
-            check_on_startup: dto.check_on_startup,
-            skip_version: dto.skip_version,
-        }
-    }
-}
-
-impl From<KeySetupStep> for KeySetupStepDto {
-    fn from(step: KeySetupStep) -> Self {
-        Self {
-            // The core enum is a plain C-like discriminant (`GenerateKey = 1 ..=
-            // FinalCheck = 6`), so the cast is the 1-based position directly.
-            index: step as u8,
-            total: KeySetupStep::all_steps().len() as u8,
-            description: step.description().to_string(),
         }
     }
 }
@@ -474,10 +320,10 @@ mod tests {
             port: 2222,
             identity_file: Some("/home/me/.ssh/id_ed25519".to_string()),
             password: Some("s3cr3t-p4ss".to_string()),
+            startup_command: Some("ssh -tt app@10.0.0.2 'sudo -iu developer'".to_string()),
             tags: vec!["prod".to_string()],
             notes: Some("primary".to_string()),
             source: HostSource::Manual,
-            password_auth_disabled: Some(true),
             ..Host::default()
         }
     }
@@ -487,7 +333,6 @@ mod tests {
         let dto = HostDto::from(&host_with_secret());
         let json = serde_json::to_string(&dto).expect("serialise HostDto");
         // The wire form must carry neither the secret field nor its value.
-        // (`passwordAuthDisabled` is a public boolean flag, not the password.)
         assert!(
             !json.contains(r#""password""#),
             "password field leaked: {json}"
@@ -504,12 +349,15 @@ mod tests {
         assert_eq!(dto.hostname, "10.0.0.1");
         assert_eq!(dto.user, "deploy");
         assert_eq!(dto.port, 2222);
+        assert_eq!(
+            dto.startup_command.as_deref(),
+            Some("ssh -tt app@10.0.0.2 'sudo -iu developer'")
+        );
         assert_eq!(dto.tags, vec!["prod".to_string()]);
         assert_eq!(dto.notes.as_deref(), Some("primary"));
         assert!(matches!(dto.source, HostSourceDto::Manual));
         // `hasKey` is derived from the identity file, which itself stays backend-side.
         assert!(dto.has_key);
-        assert_eq!(dto.password_auth_disabled, Some(true));
     }
 
     #[test]
@@ -530,6 +378,7 @@ mod tests {
             identity_file: Some("/home/me/.ssh/id_ed25519".to_string()),
             password: Some("s3cr3t-p4ss".to_string()),
             proxy_jump: Some("bastion".to_string()),
+            startup_command: Some("ssh -tt app@10.0.0.2 'sudo -iu developer'".to_string()),
             tags: vec!["prod".to_string()],
             notes: Some("primary".to_string()),
         }
@@ -549,10 +398,14 @@ mod tests {
             Some("/home/me/.ssh/id_ed25519")
         );
         assert_eq!(host.proxy_jump.as_deref(), Some("bastion"));
+        assert_eq!(
+            host.startup_command.as_deref(),
+            Some("ssh -tt app@10.0.0.2 'sudo -iu developer'")
+        );
         assert_eq!(host.tags, vec!["prod".to_string()]);
         assert_eq!(host.notes.as_deref(), Some("primary"));
         assert_eq!(host.source, HostSource::Manual);
-        // Key-setup metadata + rename origin are never the form's to set.
+        // Internal metadata is never the form's to set.
         assert!(host.original_ssh_host.is_none());
         assert!(host.key_setup_date.is_none());
         assert!(host.password_auth_disabled.is_none());
@@ -581,14 +434,22 @@ mod tests {
             identity_file: Some(String::new()),
             password: Some(String::new()),
             proxy_jump: Some(String::new()),
+            startup_command: Some(String::new()),
             tags: vec![],
             notes: Some(String::new()),
         });
         assert!(host.identity_file.is_none());
         assert!(host.password.is_none());
         assert!(host.proxy_jump.is_none());
+        assert!(host.startup_command.is_none());
         assert!(host.notes.is_none());
         assert!(!HostDto::from(&host).has_key);
+    }
+
+    #[test]
+    fn terminal_bytes_serialise_as_a_plain_number_array() {
+        let json = serde_json::to_string(&TerminalBytes(vec![27, 91, 65])).unwrap();
+        assert_eq!(json, "[27,91,65]");
     }
 
     #[test]
@@ -716,74 +577,6 @@ mod tests {
         assert!(dto.metrics.is_empty());
     }
 
-    fn full_snippet() -> Snippet {
-        Snippet {
-            name: "restart-svc".to_string(),
-            command: "systemctl restart {{service}}".to_string(),
-            scope: SnippetScope::Host,
-            host: Some("web-1".to_string()),
-            tags: Some(vec!["ops".to_string()]),
-            params: Some(vec!["service".to_string()]),
-        }
-    }
-
-    #[test]
-    fn snippet_dto_maps_every_field() {
-        let dto = SnippetDto::from(&full_snippet());
-        assert_eq!(dto.name, "restart-svc");
-        assert_eq!(dto.command, "systemctl restart {{service}}");
-        assert_eq!(dto.scope, SnippetScopeDto::Host);
-        assert_eq!(dto.host.as_deref(), Some("web-1"));
-        assert_eq!(dto.tags, Some(vec!["ops".to_string()]));
-        assert_eq!(dto.params, Some(vec!["service".to_string()]));
-    }
-
-    #[test]
-    fn snippet_scope_dto_uses_lowercase_wire_names() {
-        // The frontend switches on these exact strings (tech-gui.md §4.1).
-        let global = serde_json::to_string(&SnippetScopeDto::Global).unwrap();
-        assert_eq!(global, r#""global""#);
-        let host = serde_json::to_string(&SnippetScopeDto::Host).unwrap();
-        assert_eq!(host, r#""host""#);
-    }
-
-    #[test]
-    fn snippet_dto_omits_absent_optionals_on_the_wire() {
-        let dto = SnippetDto::from(&Snippet {
-            name: "ls".to_string(),
-            command: "ls -la".to_string(),
-            scope: SnippetScope::Global,
-            host: None,
-            tags: None,
-            params: None,
-        });
-        let json = serde_json::to_string(&dto).unwrap();
-        assert_eq!(json, r#"{"name":"ls","command":"ls -la","scope":"global"}"#);
-    }
-
-    #[test]
-    fn snippet_dto_round_trips_through_snippet() {
-        let original = full_snippet();
-        let back: Snippet = SnippetDto::from(&original).into();
-        assert_eq!(back.name, original.name);
-        assert_eq!(back.command, original.command);
-        assert_eq!(back.scope, original.scope);
-        assert_eq!(back.host, original.host);
-        assert_eq!(back.tags, original.tags);
-        assert_eq!(back.params, original.params);
-    }
-
-    #[test]
-    fn snippet_dto_deserialises_a_sparse_inbound_payload() {
-        // A minimal save_snippet payload: optionals absent -> None (tech-gui.md §4.1).
-        let dto: SnippetDto =
-            serde_json::from_str(r#"{"name":"pwd","command":"pwd","scope":"global"}"#).unwrap();
-        assert_eq!(dto.scope, SnippetScopeDto::Global);
-        assert!(dto.host.is_none());
-        assert!(dto.tags.is_none());
-        assert!(dto.params.is_none());
-    }
-
     #[test]
     fn file_entry_dto_maps_a_file_and_a_directory() {
         let file = FileEntry {
@@ -823,73 +616,6 @@ mod tests {
         assert_eq!(
             json,
             r#"{"name":"srv","path":"/srv","size":0,"isDir":true}"#
-        );
-    }
-
-    #[test]
-    fn update_info_dto_maps_from_core_and_omits_notes() {
-        use omnyssh_core::update::InstallMethod;
-        let info = UpdateInfo {
-            current: "1.0.0".to_string(),
-            latest: "1.2.0".to_string(),
-            tag: "v1.2.0".to_string(),
-            method: InstallMethod::Manual,
-            can_self_update: true,
-        };
-        let dto = UpdateInfoDto::from(&info);
-        // `version` is the latest release, `url` the core's release page (tech-gui.md §4.1).
-        assert_eq!(dto.version, "1.2.0");
-        assert_eq!(dto.tag, "v1.2.0");
-        assert_eq!(dto.url, info.release_url());
-        assert!(dto.can_self_update);
-        // No release-notes field is invented.
-        let json = serde_json::to_string(&dto).expect("serialise UpdateInfoDto");
-        assert!(!json.contains("notes"), "invented a notes field: {json}");
-        assert!(
-            json.contains(r#""canSelfUpdate":true"#),
-            "wire name drift: {json}"
-        );
-    }
-
-    #[test]
-    fn update_config_dto_round_trips_through_core() {
-        // The settings screen edits these and `save_update_config` persists them; the
-        // round-trip must be lossless (tech-gui.md §4.3 test obligation).
-        let core = UpdateConfig {
-            check_on_startup: false,
-            skip_version: "1.2.3".to_string(),
-        };
-        let dto = UpdateConfigDto::from(&core);
-        assert!(!dto.check_on_startup);
-        assert_eq!(dto.skip_version, "1.2.3");
-        let json = serde_json::to_string(&dto).expect("serialise UpdateConfigDto");
-        assert_eq!(json, r#"{"checkOnStartup":false,"skipVersion":"1.2.3"}"#);
-
-        let back: UpdateConfig = dto.into();
-        assert!(!back.check_on_startup);
-        assert_eq!(back.skip_version, "1.2.3");
-    }
-
-    #[test]
-    fn key_setup_step_dto_maps_index_total_and_label() {
-        // The progress view reads a 1-based `index` out of `total` plus the core's
-        // label (tech-gui.md §4.2). The first/last steps pin the discriminant range.
-        let dto = KeySetupStepDto::from(KeySetupStep::VerifyKeyAuth);
-        assert_eq!(dto.index, 3);
-        assert_eq!(dto.total, 6);
-        assert_eq!(dto.description, "Verifying key authentication");
-        assert_eq!(KeySetupStepDto::from(KeySetupStep::GenerateKey).index, 1);
-        assert_eq!(KeySetupStepDto::from(KeySetupStep::FinalCheck).index, 6);
-    }
-
-    #[test]
-    fn key_setup_step_dto_uses_camel_case_wire_names() {
-        // The frontend reads `index`/`total`/`description` (tech-gui.md §4.2).
-        let json = serde_json::to_string(&KeySetupStepDto::from(KeySetupStep::CopyPublicKey))
-            .expect("serialise KeySetupStepDto");
-        assert_eq!(
-            json,
-            r#"{"index":2,"total":6,"description":"Copying public key to server"}"#
         );
     }
 

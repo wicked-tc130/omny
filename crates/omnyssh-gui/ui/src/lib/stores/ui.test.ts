@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { get } from 'svelte/store';
-import { isCollapseChord, isPaletteChord, isRefreshHotkey } from './ui';
+import { isCloseSessionChord, isCollapseChord, isPaletteChord, isRefreshHotkey } from './ui';
 
 // Collapse persistence (tech-gui.md §2, §3.5). The canonical layer needs a fake
 // Tauri store — Vitest has no runtime — and a fresh module per test isolates the
@@ -118,6 +118,24 @@ describe('palette chord (⌘K / Ctrl+K)', () => {
     input.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true }));
     input.remove();
     expect(matched).toBe(true);
+  });
+});
+
+describe('close-session chord (⌘W)', () => {
+  const chord = (init: KeyboardEventInit) => isCloseSessionChord(new KeyboardEvent('keydown', init));
+
+  it('matches Command+W in either key case', () => {
+    expect(chord({ key: 'w', metaKey: true })).toBe(true);
+    expect(chord({ key: 'W', metaKey: true })).toBe(true);
+  });
+
+  it('keeps shell Ctrl+W and modified/held variants untouched', () => {
+    expect(chord({ key: 'w', ctrlKey: true })).toBe(false);
+    expect(chord({ key: 'w', metaKey: true, shiftKey: true })).toBe(false);
+    expect(chord({ key: 'w', metaKey: true, altKey: true })).toBe(false);
+    expect(chord({ key: 'w', metaKey: true, repeat: true })).toBe(false);
+    expect(chord({ key: 'w', metaKey: true, isComposing: true })).toBe(false);
+    expect(chord({ key: 'w' })).toBe(false);
   });
 });
 

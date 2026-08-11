@@ -171,6 +171,19 @@ async fn open_shell(
     Ok(channel)
 }
 
+/// Converts a configured terminal startup command into shell input. A carriage
+/// return mirrors pressing Enter in the PTY; blank values are ignored defensively
+/// even though the config and form layers already collapse them to `None`.
+fn startup_input(command: Option<&str>) -> Option<Vec<u8>> {
+    let command = command?.trim();
+    if command.is_empty() {
+        return None;
+    }
+    let mut input = command.as_bytes().to_vec();
+    input.push(b'\r');
+    Some(input)
+}
+
 /// Owns the russh channel for one session and multiplexes I/O until close/EOF.
 #[allow(clippy::too_many_arguments)] // additive raw-output sink (§3.6) is the 8th
 async fn session_task(
@@ -198,6 +211,20 @@ async fn session_task(
             return;
         }
     };
+
+    // Run the host's terminal-only startup command as the first interactive
+    // input. Do not log it: commands may contain sensitive arguments.
+    if let Some(input) = startup_input(host.startup_command.as_deref()) {
+        if let Err(e) = channel.data(&input[..]).await {
+            let _ = tx
+                .send(CoreEvent::Error(format!(
+                    "Terminal startup command could not be sent: {e}"
+                )))
+                .await;
+            let _ = tx.send(CoreEvent::PtyExited(id)).await;
+            return;
+        }
+    }
 
     // Phase C: pump loop (official russh interactive idiom). `wait` is the only
     // &mut method, so a single owning task can select over it and the control
@@ -292,6 +319,20 @@ impl PtyManager {
         rows: u16,
         tx: mpsc::Sender<CoreEvent>,
     ) -> Result<SessionId> {
+        self.open_with_registration(host, cols, rows, tx, |_| {})
+    }
+
+    /// Opens a terminal after synchronously exposing its assigned id to `register`.
+    /// The hook runs before the session task is spawned, allowing GUI consumers to
+    /// install their raw-output route without racing a fast server's first bytes.
+    pub fn open_with_registration(
+        &mut self,
+        host: &Host,
+        cols: u16,
+        rows: u16,
+        tx: mpsc::Sender<CoreEvent>,
+        register: impl FnOnce(SessionId),
+    ) -> Result<SessionId> {
         // ProxyJump is not yet wired into the russh terminal path. Refuse rather
         // than silently connecting direct to the wrong host.
         if host.proxy_jump.is_some() {
@@ -301,6 +342,7 @@ impl PtyManager {
         self.next_id += 1;
         let parser = Arc::new(Mutex::new(vt100::Parser::new(rows, cols, 1000)));
         let (ctrl_tx, ctrl_rx) = mpsc::unbounded_channel();
+        register(id);
         tokio::spawn(session_task(
             id,
             host.clone(),
@@ -399,6 +441,20 @@ mod tests {
         assert!(PtyManager::with_raw_output(raw_tx).raw_output.is_some());
     }
 
+    #[test]
+    fn startup_input_appends_enter_and_trims_outer_whitespace() {
+        assert_eq!(
+            startup_input(Some("  ssh target  ")),
+            Some(b"ssh target\r".to_vec())
+        );
+    }
+
+    #[test]
+    fn startup_input_ignores_missing_or_blank_commands() {
+        assert!(startup_input(None).is_none());
+        assert!(startup_input(Some("  \n ")).is_none());
+    }
+
     #[tokio::test]
     async fn open_assigns_incrementing_ids() {
         let mut mgr = PtyManager::new();
@@ -407,6 +463,19 @@ mod tests {
         let b = mgr.open(&host, 80, 24, dummy_tx()).unwrap();
         assert_eq!((a, b), (1, 2));
         assert_eq!(mgr.sessions.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn registration_hook_receives_the_id_before_open_returns() {
+        let mut mgr = PtyManager::new();
+        let mut registered = None;
+        let id = mgr
+            .open_with_registration(&Host::default(), 80, 24, dummy_tx(), |id| {
+                registered = Some(id)
+            })
+            .unwrap();
+        assert_eq!(registered, Some(id));
+        assert_eq!(id, 1);
     }
 
     #[tokio::test]

@@ -2,7 +2,7 @@
 // console window alongside it. Debug builds keep the console for cargo output.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-//! OmnySSH Desktop entry point. Wires the tauri-specta IPC boundary (commands +
+//! Omny desktop entry point. Wires the tauri-specta IPC boundary (commands +
 //! events), regenerates the TypeScript bindings in dev, spawns the core-event
 //! bridge, and boots the window (tech-gui.md §3.3–§3.4).
 
@@ -14,14 +14,13 @@ mod events;
 mod state;
 
 use commands::hosts::{delete_host, list_hosts, refresh_metrics, reload_hosts, save_host};
-use commands::keysetup::start_key_setup;
 use commands::sftp::{
     list_local_dir, preview_local_file, sftp_close, sftp_delete, sftp_download, sftp_list,
     sftp_mkdir, sftp_open, sftp_preview, sftp_rename, sftp_upload,
 };
-use commands::snippets::{delete_snippet, execute_snippet, list_snippets, save_snippet};
-use commands::terminal::{terminal_close, terminal_open, terminal_resize, terminal_write};
-use commands::update::{check_update, install_update, load_update_config, save_update_config};
+use commands::terminal::{
+    terminal_close, terminal_open, terminal_ready, terminal_resize, terminal_write,
+};
 use omnyssh_core::event::{CoreEvent, SessionId};
 use omnyssh_core::ssh::pty::PtyManager;
 use state::GuiState;
@@ -30,6 +29,7 @@ use tauri::Manager;
 use tauri_specta::{collect_commands, collect_events, Builder};
 
 // Absolute at build time, so the export target is independent of the run CWD.
+#[cfg(debug_assertions)]
 const BINDINGS_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/ui/src/lib/bindings.ts");
 
 /// How long the hidden window may wait for the page before it is revealed anyway.
@@ -46,11 +46,8 @@ fn specta_builder() -> Builder<tauri::Wry> {
             reload_hosts,
             save_host,
             delete_host,
-            list_snippets,
-            save_snippet,
-            delete_snippet,
-            execute_snippet,
             terminal_open,
+            terminal_ready,
             terminal_write,
             terminal_resize,
             terminal_close,
@@ -65,12 +62,7 @@ fn specta_builder() -> Builder<tauri::Wry> {
             sftp_close,
             list_local_dir,
             preview_local_file,
-            start_key_setup,
-            refresh_metrics,
-            check_update,
-            install_update,
-            load_update_config,
-            save_update_config
+            refresh_metrics
         ])
         .events(collect_events![
             events::HostsLoaded,
@@ -78,7 +70,6 @@ fn specta_builder() -> Builder<tauri::Wry> {
             events::MetricsUpdated,
             events::ServicesDetected,
             events::ServicesFailed,
-            events::SnippetResult,
             events::TerminalExited,
             events::SftpConnected,
             events::SftpDirListed,
@@ -86,11 +77,6 @@ fn specta_builder() -> Builder<tauri::Wry> {
             events::SftpDisconnected,
             events::FilePreview,
             events::TransferProgress,
-            events::KeySetupProgress,
-            events::KeySetupComplete,
-            events::KeySetupFailed,
-            events::KeySetupRollback,
-            events::UpdateAvailable,
             events::Error
         ])
 }
@@ -118,10 +104,6 @@ fn main() {
         // Persists UI prefs (theme, sidebar collapse, refresh interval) from the
         // frontend JS API — no bespoke command (tech-gui.md §4.2, §5.1).
         .plugin(tauri_plugin_store::Builder::new().build())
-        // Desktop self-update (tech-gui.md §4.3); endpoints/signing land in Stage 5.
-        .plugin(tauri_plugin_updater::Builder::new().build())
-        // Opens the support dialog's GitHub/Telegram links in the default browser.
-        .plugin(tauri_plugin_opener::init())
         .invoke_handler(builder.invoke_handler())
         // The window is created hidden (tauri.conf.json `visible: false`) so the
         // launch never shows the webview's blank base colour; reveal it once the
@@ -175,14 +157,13 @@ fn main() {
             tauri::async_runtime::spawn(bridge::forward_core_events(handle.clone(), engine_rx));
             tauri::async_runtime::spawn(bridge::forward_terminal_output(handle, raw_rx));
 
-            // The pollers and the startup update check are both started by the frontend's
-            // first `reload_hosts`, once its event bridge is listening — starting them
-            // here would race listener registration and drop `HostStatusChanged` /
-            // `UpdateAvailable` before the webview can receive them (§3.4).
+            // Pollers start from the frontend's first `reload_hosts`, once its event
+            // bridge is listening; starting here would race listener registration and
+            // drop early `HostStatusChanged` events (§3.4).
             Ok(())
         })
         .run(tauri::generate_context!())
-        .expect("failed to launch OmnySSH Desktop");
+        .expect("failed to launch Omny");
 }
 
 #[cfg(test)]

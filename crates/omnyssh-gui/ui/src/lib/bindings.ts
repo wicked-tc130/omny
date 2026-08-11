@@ -18,8 +18,7 @@ async listHosts() : Promise<Result<HostDto[], CommandError>> {
 },
 /**
  * Reload hosts from the shared config, refresh the cache, restart the pollers,
- * and broadcast the new list via `hosts-loaded` (tech-gui.md §4.2). Also the
- * startup entry point: the frontend calls it once its event bridge is up.
+ * and broadcast the new list via `hosts-loaded` (tech-gui.md §4.2).
  */
 async reloadHosts() : Promise<Result<null, CommandError>> {
     try {
@@ -30,15 +29,14 @@ async reloadHosts() : Promise<Result<null, CommandError>> {
 }
 },
 /**
- * Add or edit a **manual** host and persist to `hosts.toml` (tech-gui.md §4.2, Stage
- * 4.1). Upserts by name; SSH-config hosts are read-only imports and are never written
- * (this operates on the manual `hosts.toml` alone). The frontend calls `reload_hosts`
- * afterwards to refresh the merged cache + restart the pollers. Secrets stay
- * backend-side (§3.4): the payload's password/identity never left the backend.
+ * Add, edit, or rename a **manual** host and persist to `hosts.toml` (tech-gui.md
+ * §4.2, Stage 4.1). `previous_name` identifies the existing record during an edit,
+ * allowing an atomic rename that preserves backend-only secrets and metadata.
+ * SSH-config hosts remain read-only imports and are never written.
  */
-async saveHost(input: HostInputDto) : Promise<Result<null, CommandError>> {
+async saveHost(input: HostInputDto, previousName: string | null) : Promise<Result<null, CommandError>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("save_host", { input }) };
+    return { status: "ok", data: await TAURI_INVOKE("save_host", { input, previousName }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -58,56 +56,6 @@ async deleteHost(name: string) : Promise<Result<null, CommandError>> {
 }
 },
 /**
- * List saved snippets from the shared `snippets.toml` (tech-gui.md §4.2).
- */
-async listSnippets() : Promise<Result<SnippetDto[], CommandError>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("list_snippets") };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * Upsert a snippet by name and persist the whole list (tech-gui.md §4.2). A new
- * name appends; an existing name is replaced in place (an in-place edit). A rename
- * is a frontend delete-old + save-new, since the contract keys snippets on `name`.
- */
-async saveSnippet(snippet: SnippetDto) : Promise<Result<null, CommandError>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("save_snippet", { snippet }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * Delete the snippet named `name` and persist (tech-gui.md §4.2). A missing name is
- * a no-op success — the desired end state (absent) already holds.
- */
-async deleteSnippet(name: string) : Promise<Result<null, CommandError>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("delete_snippet", { name }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * Execute a snippet on one or more hosts (tech-gui.md §4.2). Substitutes the
- * provided values into declared placeholders, then fires one task per host that
- * runs the command over a fresh SSH session and emits a `snippet-result` (§4.3).
- * Fire-and-forget: results arrive as events, mirroring the core's own model.
- */
-async executeSnippet(snippetName: string, hostNames: string[], params: Partial<{ [key in string]: string }>) : Promise<Result<null, CommandError>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("execute_snippet", { snippetName, hostNames, params }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
  * Open a terminal for `host_name`, streaming raw output into `on_output`. Returns
  * the public session id used by the write/resize/close commands (tech-gui.md §4.2).
  */
@@ -120,8 +68,20 @@ async terminalOpen(hostName: string, cols: number, rows: number, onOutput: TAURI
 }
 },
 /**
+ * Acknowledge that the frontend recorded the returned id and xterm can consume
+ * output. This flushes bytes held during the opening IPC response.
+ */
+async terminalReady(sessionId: number) : Promise<Result<null, CommandError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("terminal_ready", { sessionId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Send keystrokes / pasted bytes to a terminal (tech-gui.md §4.2). Input is
- * low-volume, so the ordinary `number[]` path is fine here (only output is raw).
+ * low-volume, so the ordinary `number[]` path is fine here.
  */
 async terminalWrite(sessionId: number, data: number[]) : Promise<Result<null, CommandError>> {
     try {
@@ -282,76 +242,12 @@ async previewLocalFile(path: string) : Promise<Result<string, CommandError>> {
 }
 },
 /**
- * Start auto key-setup for `host_name` (tech-gui.md §4.2). Fire-and-forget: the flow
- * runs on a background task and reports via `key-setup-*` events, mirroring the core's
- * own model. Resolving the full host record (secrets included) stays backend-side
- * (§3.4). One run at a time: an unknown host or a run already in flight is the
- * synchronous error, so two runs never race a `hosts.toml` write.
- */
-async startKeySetup(hostName: string) : Promise<Result<null, CommandError>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("start_key_setup", { hostName }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
  * Trigger an immediate metric poll of every host (tech-gui.md §4.2). Used by the
  * settings-driven refresh cadence (§4.3); a no-op before the pollers start.
  */
 async refreshMetrics() : Promise<Result<null, CommandError>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("refresh_metrics") };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * Query GitHub for a newer release (tech-gui.md §4.2). `None` means up to date — the
- * core swallows network/parse errors so a failed check never disrupts.
- */
-async checkUpdate() : Promise<Result<UpdateInfoDto | null, CommandError>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("check_update") };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * Download and install the latest desktop bundle via `tauri-plugin-updater` (tech-gui.md
- * §4.3/§3.7). Until Stage 5 configures the updater endpoints + signing key the plugin
- * has nothing to point at, so this reports "not available yet" rather than touching the
- * running binary.
- */
-async installUpdate() : Promise<Result<null, CommandError>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("install_update") };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * Read the update-checker preferences from the shared config (tech-gui.md §4.3).
- */
-async loadUpdateConfig() : Promise<Result<UpdateConfigDto, CommandError>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("load_update_config") };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-/**
- * Persist the update-checker preferences to the shared config's `[update]` section
- * (tech-gui.md §4.3). Writes off the async worker — parse + atomic write are blocking.
- */
-async saveUpdateConfig(config: UpdateConfigDto) : Promise<Result<null, CommandError>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("save_update_config", { config }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -367,10 +263,6 @@ error: Error,
 filePreview: FilePreview,
 hostStatusChanged: HostStatusChanged,
 hostsLoaded: HostsLoaded,
-keySetupComplete: KeySetupComplete,
-keySetupFailed: KeySetupFailed,
-keySetupProgress: KeySetupProgress,
-keySetupRollback: KeySetupRollback,
 metricsUpdated: MetricsUpdated,
 servicesDetected: ServicesDetected,
 servicesFailed: ServicesFailed,
@@ -378,19 +270,13 @@ sftpConnected: SftpConnected,
 sftpDirListed: SftpDirListed,
 sftpDisconnected: SftpDisconnected,
 sftpOpDone: SftpOpDone,
-snippetResult: SnippetResult,
 terminalExited: TerminalExited,
-transferProgress: TransferProgress,
-updateAvailable: UpdateAvailable
+transferProgress: TransferProgress
 }>({
 error: "error",
 filePreview: "file-preview",
 hostStatusChanged: "host-status-changed",
 hostsLoaded: "hosts-loaded",
-keySetupComplete: "key-setup-complete",
-keySetupFailed: "key-setup-failed",
-keySetupProgress: "key-setup-progress",
-keySetupRollback: "key-setup-rollback",
 metricsUpdated: "metrics-updated",
 servicesDetected: "services-detected",
 servicesFailed: "services-failed",
@@ -398,10 +284,8 @@ sftpConnected: "sftp-connected",
 sftpDirListed: "sftp-dir-listed",
 sftpDisconnected: "sftp-disconnected",
 sftpOpDone: "sftp-op-done",
-snippetResult: "snippet-result",
 terminalExited: "terminal-exited",
-transferProgress: "transfer-progress",
-updateAvailable: "update-available"
+transferProgress: "transfer-progress"
 })
 
 /** user-defined constants **/
@@ -435,7 +319,7 @@ export type FilePreview = { sessionId: number; path: string; content: string }
  * (tech-gui.md §3.4). `hasKey` reports whether an identity file is configured;
  * the key path itself never crosses the boundary.
  */
-export type HostDto = { name: string; hostname: string; user: string; port: number; tags: string[]; notes?: string | null; source: HostSourceDto; hasKey: boolean; passwordAuthDisabled?: boolean | null }
+export type HostDto = { name: string; hostname: string; user: string; port: number; startupCommand?: string | null; tags: string[]; notes?: string | null; source: HostSourceDto; hasKey: boolean }
 /**
  * Inbound host form payload for `save_host` (tech-gui.md §4.1, Stage 4.1). Builds a
  * **manual** `Host` — SSH-config hosts are read-only imports and are never saved.
@@ -443,7 +327,7 @@ export type HostDto = { name: string; hostname: string; user: string; port: numb
  * travel back out: the outbound `HostDto` omits both (§3.4). Inbound only, so it
  * derives `Deserialize` (not `Serialize`).
  */
-export type HostInputDto = { name: string; hostname: string; user: string; port: number; identityFile?: string | null; password?: string | null; proxyJump?: string | null; tags: string[]; notes?: string | null }
+export type HostInputDto = { name: string; hostname: string; user: string; port: number; identityFile?: string | null; password?: string | null; proxyJump?: string | null; startupCommand?: string | null; tags: string[]; notes?: string | null }
 /**
  * Host origin, mirrors `omnyssh_core::ssh::client::HostSource`.
  */
@@ -457,32 +341,6 @@ export type HostStatusChanged = { hostName: string; status: ConnectionStatusDto 
  * cache; the bridge does not map `HostsLoaded` (tech-gui.md §3.4).
  */
 export type HostsLoaded = HostDto[]
-/**
- * Key setup finished successfully — key auth is configured (tech-gui.md §4.3).
- * `keyPath` is the generated private-key path (a path, never key material, §3.4).
- */
-export type KeySetupComplete = { hostName: string; keyPath: string }
-/**
- * Key setup failed before touching the server's auth config (tech-gui.md §4.3).
- * Password authentication is never disabled unless a key was verified first.
- */
-export type KeySetupFailed = { hostName: string; error: string }
-/**
- * A progress step of an auto key-setup run (tech-gui.md §4.3). Mapped by the shared
- * engine bridge from `CoreEvent::KeySetupProgress`; the host name identifies the run.
- */
-export type KeySetupProgress = { hostName: string; step: KeySetupStepDto }
-/**
- * Key setup rolled the server's sshd config back after a late failure (tech-gui.md
- * §4.3). `result` is the human-readable rollback outcome.
- */
-export type KeySetupRollback = { hostName: string; result: string }
-/**
- * One step of the auto key-setup flow, for the progress view (tech-gui.md §4.2/§4.3).
- * `index` is 1-based (`1..=total`); `description` is the core's human-readable label.
- * Maps from the core `KeySetupStep`.
- */
-export type KeySetupStepDto = { index: number; total: number; description: string }
 /**
  * A metrics snapshot for a host (tech-gui.md §4.1). The core's `Instant` is
  * flattened to `ageSeconds` (seconds since the sample) so it can serialise.
@@ -542,31 +400,9 @@ export type SftpDisconnected = { sessionId: number; reason: string }
  */
 export type SftpOpDone = { sessionId: number; ok: boolean; error?: string | null }
 /**
- * A saved command snippet as the frontend sees it (tech-gui.md §4.1). Crosses the
- * boundary both ways — outbound for `list_snippets`, inbound for `save_snippet` —
- * so it derives `Deserialize` too. Optional fields are omitted when absent, matching
- * the sparse `snippets.toml` the TUI writes.
- */
-export type SnippetDto = { name: string; command: string; scope: SnippetScopeDto; host?: string | null; tags?: string[] | null; params?: string[] | null }
-/**
- * Result of running a snippet on one host (tech-gui.md §4.3). Emitted directly by
- * `execute_snippet` per host (one-shot `SshSession::run_command`), not via the
- * shared bridge — the same "the command owns the result" pattern the SFTP
- * per-session forwarder uses (§3.4). The core's `Result<String, String>` is
- * flattened to `ok` + `output` (stdout on success, the error message on failure).
- */
-export type SnippetResult = { hostName: string; snippetName: string; ok: boolean; output: string }
-/**
- * Snippet scope, mirrors `omnyssh_core::config::snippets::SnippetScope`. Wire
- * names are lowercase (`global`, `host`).
- */
-export type SnippetScopeDto = "global" | "host"
-/**
- * Raw PTY output bytes for a terminal session's per-session `Channel` (tech-gui.md
- * §3.3/§3.6). Deliberately **not** `Serialize`: that dodges the blanket
- * `Serialize -> IpcResponse` mapping (which would JSON-encode to a slow `number[]`),
- * so the bytes ride the channel as a raw `ArrayBuffer` that xterm writes directly.
- * Only ever sent, never received — the sole non-DTO on the boundary.
+ * PTY output bytes for a terminal session's per-session `Channel` (tech-gui.md
+ * §3.3/§3.6). Serialized transparently as `number[]`: this is slightly less compact
+ * than a raw `ArrayBuffer`, but works consistently across Tauri/WebKit versions.
  */
 export type TerminalBytes = number[]
 /**
@@ -587,23 +423,6 @@ export type TransferProgress = TransferProgressDto
  * remote size could not be determined).
  */
 export type TransferProgressDto = { sessionId: number; transferId: number; done: number; total: number }
-/**
- * A newer release was found by the startup check (tech-gui.md §4.3). Mapped by the
- * shared engine bridge from `CoreEvent::UpdateAvailable`; drives the update banner.
- */
-export type UpdateAvailable = { info: UpdateInfoDto }
-/**
- * Update-checker preferences, mirrors core `UpdateConfig` (tech-gui.md §4.3). Crosses
- * both ways: outbound for the settings screen, inbound for `save_update_config`.
- */
-export type UpdateConfigDto = { checkOnStartup: boolean; skipVersion: string }
-/**
- * A newer release the app can offer (tech-gui.md §4.1). `version` is the latest
- * version (no leading `v`); `url` is the release page; `canSelfUpdate` mirrors the
- * core's self-update eligibility. The core `UpdateInfo` has no release-notes field, so
- * none is invented (§4.1).
- */
-export type UpdateInfoDto = { version: string; url: string; tag: string; canSelfUpdate: boolean }
 
 /** tauri-specta globals **/
 

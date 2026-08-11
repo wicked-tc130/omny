@@ -12,10 +12,10 @@
   import { spawnSession } from '$lib/stores/navigation';
   import { streamerMode, displayHostname } from '$lib/stores/streamer';
   import { hosts } from '$lib/stores/hosts';
+  import { hostOrder } from '$lib/stores/hostOrder';
   import { lastError } from '$lib/stores/notifications';
-  import { saveHost, deleteHost, reloadHosts, startKeySetup, refreshMetrics } from '$lib/ipc/commands';
+  import { saveHost, deleteHost, reloadHosts, refreshMetrics } from '$lib/ipc/commands';
   import { isRefreshHotkey } from '$lib/stores/ui';
-  import { beginKeySetup, dismissKeySetup } from '$lib/stores/keySetup';
   import { emptyForm, formFromHost } from './hostForm';
   import HostEditor from './HostEditor.svelte';
   import Modal from '$lib/components/Modal.svelte';
@@ -25,11 +25,59 @@
   let dialog = $state<Dialog | null>(null);
 
   // Host search (task 6): a round toggle slides a filter field out to its left and the
-  // grid filters live. Frontend-only, like the snippet search — the core stays untouched.
+  // grid filters live without changing the core host list.
   let query = $state('');
   let searchOpen = $state(false);
   let searchInput = $state<HTMLInputElement>();
   const visibleCards = $derived(filterHosts($serverCards, query));
+  let draggedHost = $state<string | null>(null);
+  let dragTarget = $state<string | null>(null);
+  let dragPointerId = $state<number | null>(null);
+
+  function startDrag(event: PointerEvent, hostName: string): void {
+    if (query.trim()) {
+      event.preventDefault();
+      return;
+    }
+    if (event.button !== 0) return;
+    event.preventDefault();
+    draggedHost = hostName;
+    dragPointerId = event.pointerId;
+    (event.currentTarget as HTMLButtonElement).setPointerCapture(event.pointerId);
+  }
+
+  function hostAtPointer(event: PointerEvent): string | null {
+    const card = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>('[data-host-name]');
+    return card?.dataset.hostName ?? null;
+  }
+
+  function moveDrag(event: PointerEvent): void {
+    if (!draggedHost || event.pointerId !== dragPointerId) return;
+    event.preventDefault();
+    const target = hostAtPointer(event);
+    dragTarget = target && target !== draggedHost ? target : null;
+  }
+
+  function drop(event: PointerEvent): void {
+    if (!draggedHost || event.pointerId !== dragPointerId) return;
+    event.preventDefault();
+    const moving = draggedHost;
+    const target = hostAtPointer(event) ?? dragTarget;
+    if (target && target !== moving) {
+      hostOrder.move($serverCards.map((card) => card.host.name), moving, target);
+    }
+    (event.currentTarget as HTMLButtonElement).releasePointerCapture(event.pointerId);
+    draggedHost = null;
+    dragTarget = null;
+    dragPointerId = null;
+  }
+
+  function endDrag(event?: PointerEvent): void {
+    if (event && event.pointerId !== dragPointerId) return;
+    draggedHost = null;
+    dragTarget = null;
+    dragPointerId = null;
+  }
 
   function toggleSearch(): void {
     searchOpen = !searchOpen;
@@ -70,27 +118,14 @@
   // (`reload_hosts` broadcasts `hosts-loaded`). Throws propagate to the editor so a
   // failed save surfaces inline and keeps the form open.
   async function submit(input: HostInputDto, previousName: string | undefined): Promise<void> {
-    // Adding: refuse a name already taken (a save would silently overwrite it). An
-    // edit keeps its name (the name field is immutable, §4.1), so it can't collide.
-    if (!previousName && get(hosts).some((h) => h.name === input.name)) {
+    // Adds and renames must not overwrite an existing manual or SSH-config host.
+    if (input.name !== previousName && get(hosts).some((h) => h.name === input.name)) {
       throw new Error(`A host named "${input.name}" already exists`);
     }
-    await saveHost(input);
+    await saveHost(input, previousName);
+    if (previousName && previousName !== input.name) hostOrder.rename(previousName, input.name);
     await reloadHosts();
     dialog = null;
-  }
-
-  // Host-first auto key-setup (tech-gui.md §4.2). Open the progress panel immediately,
-  // then kick the backend flow; its progress/outcome arrive as `key-setup-*` events.
-  // A synchronous reject (unknown host) closes the panel and surfaces the error.
-  async function setupKey(host: HostDto): Promise<void> {
-    beginKeySetup(host.name);
-    try {
-      await startKeySetup(host.name);
-    } catch (e) {
-      dismissKeySetup();
-      lastError.set(message(e));
-    }
   }
 
   async function confirmDelete(name: string): Promise<void> {
@@ -188,9 +223,16 @@
       <p class="text-sm text-muted">No hosts match “{query}”.</p>
     </div>
   {:else}
-    <div class="grid gap-4 [grid-template-columns:repeat(auto-fill,minmax(19rem,1fr))]">
-      {#each visibleCards as card, i (i)}
-        <Surface class="flex flex-col gap-4 p-5">
+    <div role="list" class="grid gap-4 [grid-template-columns:repeat(auto-fill,minmax(19rem,1fr))]">
+      {#each visibleCards as card (card.host.name)}
+        <div
+          role="listitem"
+          data-host-name={card.host.name}
+          class="h-full rounded-2xl transition {dragTarget === card.host.name
+            ? 'ring-2 ring-focus ring-offset-2 ring-offset-bg'
+            : ''} {draggedHost === card.host.name ? 'opacity-50' : ''}"
+        >
+        <Surface class="flex h-full flex-col gap-4 p-5">
           <!-- Identity, then the actions on their own row so the name and address
                stay readable at any card width (a full row instead of sharing it). -->
           <div class="flex flex-col gap-3">
@@ -209,17 +251,7 @@
                       ssh config
                     </span>
                   {/if}
-                  <!-- Auth-state reflection (tech-gui.md §4.2): key-only once password
-                       auth is disabled, otherwise a plain key badge when a key exists. -->
-                  {#if card.host.passwordAuthDisabled}
-                    <span
-                      class="inline-flex shrink-0 items-center gap-1 rounded-full border border-default px-1.5 py-0.5 text-[10px] text-faint"
-                      title="Password authentication disabled — key only"
-                    >
-                      <Icon name="shield" size={10} />
-                      key-only
-                    </span>
-                  {:else if card.host.hasKey}
+                  {#if card.host.hasKey}
                     <span
                       class="inline-flex shrink-0 items-center gap-1 rounded-full border border-default px-1.5 py-0.5 text-[10px] text-faint"
                       title="Key authentication configured"
@@ -234,6 +266,20 @@
                     .port}
                 </div>
               </div>
+              <button
+                type="button"
+                class="ml-auto grid h-7 w-7 shrink-0 touch-none cursor-grab place-items-center rounded-lg text-faint transition hover:bg-surface-inset hover:text-muted active:cursor-grabbing {query.trim()
+                  ? 'cursor-not-allowed opacity-40'
+                  : ''}"
+                title={query.trim() ? 'Clear search to reorder' : `Drag to reorder ${card.host.name}`}
+                aria-label={query.trim() ? 'Clear search to reorder' : `Drag to reorder ${card.host.name}`}
+                onpointerdown={(event) => startDrag(event, card.host.name)}
+                onpointermove={moveDrag}
+                onpointerup={drop}
+                onpointercancel={endDrag}
+              >
+                <Icon name="grip" size={16} />
+              </button>
             </div>
             <div class="flex flex-wrap items-center gap-1.5">
               {#each QUICK_ACTIONS as action (action.id)}
@@ -247,17 +293,6 @@
                   {action.label}
                 </button>
               {/each}
-              {#if card.host.source === 'manual' && !card.host.hasKey}
-                <button
-                  type="button"
-                  class={iconBtn}
-                  title="Set up an SSH key for {card.host.name}"
-                  aria-label="Set up an SSH key for {card.host.name}"
-                  onclick={() => setupKey(card.host)}
-                >
-                  <Icon name="key" size={14} />
-                </button>
-              {/if}
               {#if card.host.source === 'manual'}
                 <button
                   type="button"
@@ -339,6 +374,7 @@
             <div class="text-xs text-faint">Service scan unavailable</div>
           {/if}
         </Surface>
+        </div>
       {/each}
     </div>
   {/if}

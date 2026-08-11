@@ -26,10 +26,6 @@
     />
   {:else if name === 'moon'}
     <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
-  {:else if name === 'command'}
-    <path
-      d="M18 3a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3H6a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3V6a3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3h12a3 3 0 0 0 3-3 3 3 0 0 0-3-3z"
-    />
   {:else if name === 'search'}
     <circle cx="11" cy="11" r="7" />
     <line x1="21" y1="21" x2="16.65" y2="16.65" />
@@ -38,9 +34,6 @@
     <rect x="14" y="3" width="7" height="7" rx="1" />
     <rect x="14" y="14" width="7" height="7" rx="1" />
     <rect x="3" y="14" width="7" height="7" rx="1" />
-  {:else if name === 'snippets'}
-    <polyline points="8 8 4 12 8 16" />
-    <polyline points="16 8 20 12 16 16" />
   {:else if name === 'sftp'}
     <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
   {:else if name === 'terminal'}
@@ -57,8 +50,6 @@
     <polyline points="6 7 11 12 6 17" />
   {:else if name === 'check'}
     <polyline points="20 6 9 17 4 12" />
-  {:else if name === 'play'}
-    <polygon points="6 4 20 12 6 20 6 4" />
   {:else if name === 'edit'}
     <path d="M12 20h9" />
     <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z" />
@@ -90,14 +81,13 @@
     <path d="M10.85 12.15 19 4" />
     <path d="M18 5l2 2" />
     <path d="M15 8l2 2" />
-  {:else if name === 'shield'}
-    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-    <polyline points="9 12 11 14 15 10" />
-  {:else if name === 'telegram'}
-    <line x1="22" y1="2" x2="11" y2="13" />
-    <polygon points="22 2 15 22 11 13 2 9 22 2" />
-  {:else if name === 'star'}
-    <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+  {:else if name === 'grip'}
+    <circle cx="8" cy="6" r="1" fill="currentColor" stroke="none" />
+    <circle cx="16" cy="6" r="1" fill="currentColor" stroke="none" />
+    <circle cx="8" cy="12" r="1" fill="currentColor" stroke="none" />
+    <circle cx="16" cy="12" r="1" fill="currentColor" stroke="none" />
+    <circle cx="8" cy="18" r="1" fill="currentColor" stroke="none" />
+    <circle cx="16" cy="18" r="1" fill="currentColor" stroke="none" />
   {:else if name === 'settings'}
     <circle cx="12" cy="12" r="3" />
     <path

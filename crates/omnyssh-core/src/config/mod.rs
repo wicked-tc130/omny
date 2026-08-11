@@ -272,6 +272,7 @@ mod tests {
         h.hostname = "10.0.0.1".to_string();
         h.user = "deploy".to_string();
         h.port = 2222;
+        h.startup_command = Some("ssh -tt app@10.0.0.2 'sudo -iu developer'".to_string());
         h.tags = vec!["prod".to_string()];
         let toml_str = toml::to_string_pretty(&HostsFile { hosts: vec![h] }).unwrap();
         let parsed: HostsFile = toml::from_str(&toml_str).unwrap();
@@ -281,6 +282,10 @@ mod tests {
         assert_eq!(g.hostname, "10.0.0.1");
         assert_eq!(g.user, "deploy");
         assert_eq!(g.port, 2222);
+        assert_eq!(
+            g.startup_command.as_deref(),
+            Some("ssh -tt app@10.0.0.2 'sudo -iu developer'")
+        );
         assert_eq!(g.tags, vec!["prod"]);
     }
 
@@ -313,6 +318,7 @@ mod tests {
         .unwrap();
         assert!(!toml_str.contains("identity_file"));
         assert!(!toml_str.contains("password"));
+        assert!(!toml_str.contains("startup_command"));
     }
 
     #[test]

@@ -18,6 +18,7 @@ pub const FORM_FIELD_LABELS: &[&str] = &[
     "Port",
     "Identity File",
     "Password (optional)",
+    "Terminal startup command",
     "Tags (comma-sep)",
     "Notes",
 ];
@@ -89,8 +90,9 @@ impl HostForm {
         form.fields[3] = FormField::with_value(host.port.to_string());
         form.fields[4] = FormField::with_value(host.identity_file.as_deref().unwrap_or(""));
         form.fields[5] = FormField::with_value(host.password.as_deref().unwrap_or(""));
-        form.fields[6] = FormField::with_value(host.tags.join(", "));
-        form.fields[7] = FormField::with_value(host.notes.as_deref().unwrap_or(""));
+        form.fields[6] = FormField::with_value(host.startup_command.as_deref().unwrap_or(""));
+        form.fields[7] = FormField::with_value(host.tags.join(", "));
+        form.fields[8] = FormField::with_value(host.notes.as_deref().unwrap_or(""));
         form
     }
 
@@ -147,7 +149,16 @@ impl HostForm {
             }
         };
 
-        let tags: Vec<String> = self.fields[6]
+        let startup_command = {
+            let v = self.fields[6].value.trim();
+            if v.is_empty() {
+                None
+            } else {
+                Some(v.to_string())
+            }
+        };
+
+        let tags: Vec<String> = self.fields[7]
             .value
             .split(',')
             .map(|t| t.trim().to_string())
@@ -155,7 +166,7 @@ impl HostForm {
             .collect();
 
         let notes = {
-            let v = self.fields[7].value.trim();
+            let v = self.fields[8].value.trim();
             if v.is_empty() {
                 None
             } else {
@@ -171,6 +182,7 @@ impl HostForm {
             identity_file,
             password,
             proxy_jump: None,
+            startup_command,
             tags,
             notes,
             source,
@@ -541,8 +553,8 @@ impl App {
 mod tests {
     use super::*;
 
-    /// Builds a host form from the 8 field values, in `FORM_FIELD_LABELS` order.
-    fn host_form(values: [&str; 8]) -> HostForm {
+    /// Builds a host form from the 9 field values, in `FORM_FIELD_LABELS` order.
+    fn host_form(values: [&str; 9]) -> HostForm {
         let mut form = HostForm::empty();
         for (i, v) in values.iter().enumerate() {
             form.fields[i] = FormField::with_value(*v);
@@ -554,25 +566,25 @@ mod tests {
 
     #[test]
     fn to_host_empty_name_errs() {
-        let form = host_form(["", "h", "u", "22", "", "", "", ""]);
+        let form = host_form(["", "h", "u", "22", "", "", "", "", ""]);
         assert!(form.to_host(HostSource::Manual).is_err());
     }
 
     #[test]
     fn to_host_whitespace_name_errs() {
-        let form = host_form(["   ", "h", "u", "22", "", "", "", ""]);
+        let form = host_form(["   ", "h", "u", "22", "", "", "", "", ""]);
         assert!(form.to_host(HostSource::Manual).is_err());
     }
 
     #[test]
     fn to_host_empty_hostname_errs() {
-        let form = host_form(["n", "", "u", "22", "", "", "", ""]);
+        let form = host_form(["n", "", "u", "22", "", "", "", "", ""]);
         assert!(form.to_host(HostSource::Manual).is_err());
     }
 
     #[test]
     fn to_host_empty_user_defaults_root() {
-        let host = host_form(["n", "h", "", "22", "", "", "", ""])
+        let host = host_form(["n", "h", "", "22", "", "", "", "", ""])
             .to_host(HostSource::Manual)
             .unwrap();
         assert_eq!(host.user, "root");
@@ -580,7 +592,7 @@ mod tests {
 
     #[test]
     fn to_host_whitespace_user_defaults_root() {
-        let host = host_form(["n", "h", "  ", "22", "", "", "", ""])
+        let host = host_form(["n", "h", "  ", "22", "", "", "", "", ""])
             .to_host(HostSource::Manual)
             .unwrap();
         assert_eq!(host.user, "root");
@@ -588,7 +600,7 @@ mod tests {
 
     #[test]
     fn to_host_empty_port_defaults_22() {
-        let host = host_form(["n", "h", "u", "", "", "", "", ""])
+        let host = host_form(["n", "h", "u", "", "", "", "", "", ""])
             .to_host(HostSource::Manual)
             .unwrap();
         assert_eq!(host.port, 22);
@@ -596,7 +608,7 @@ mod tests {
 
     #[test]
     fn to_host_valid_port_parsed() {
-        let host = host_form(["n", "h", "u", "2222", "", "", "", ""])
+        let host = host_form(["n", "h", "u", "2222", "", "", "", "", ""])
             .to_host(HostSource::Manual)
             .unwrap();
         assert_eq!(host.port, 2222);
@@ -604,7 +616,7 @@ mod tests {
 
     #[test]
     fn to_host_port_max_accepted() {
-        let host = host_form(["n", "h", "u", "65535", "", "", "", ""])
+        let host = host_form(["n", "h", "u", "65535", "", "", "", "", ""])
             .to_host(HostSource::Manual)
             .unwrap();
         assert_eq!(host.port, 65535);
@@ -613,14 +625,14 @@ mod tests {
     #[test]
     fn to_host_port_zero_errs() {
         // Port 0 is invalid for SSH; the form rejects it.
-        assert!(host_form(["n", "h", "u", "0", "", "", "", ""])
+        assert!(host_form(["n", "h", "u", "0", "", "", "", "", ""])
             .to_host(HostSource::Manual)
             .is_err());
     }
 
     #[test]
     fn to_host_port_overflow_errs() {
-        let err = host_form(["n", "h", "u", "65536", "", "", "", ""])
+        let err = host_form(["n", "h", "u", "65536", "", "", "", "", ""])
             .to_host(HostSource::Manual)
             .unwrap_err();
         assert!(err.contains("between 1 and 65535"));
@@ -628,40 +640,62 @@ mod tests {
 
     #[test]
     fn to_host_port_non_numeric_errs() {
-        assert!(host_form(["n", "h", "u", "abc", "", "", "", ""])
+        assert!(host_form(["n", "h", "u", "abc", "", "", "", "", ""])
             .to_host(HostSource::Manual)
             .is_err());
     }
 
     #[test]
     fn to_host_port_negative_errs() {
-        assert!(host_form(["n", "h", "u", "-1", "", "", "", ""])
+        assert!(host_form(["n", "h", "u", "-1", "", "", "", "", ""])
             .to_host(HostSource::Manual)
             .is_err());
     }
 
     #[test]
     fn to_host_optional_fields_none_when_empty() {
-        let host = host_form(["n", "h", "u", "22", "", "", "", ""])
+        let host = host_form(["n", "h", "u", "22", "", "", "", "", ""])
             .to_host(HostSource::Manual)
             .unwrap();
         assert!(host.identity_file.is_none());
         assert!(host.password.is_none());
+        assert!(host.startup_command.is_none());
         assert!(host.notes.is_none());
         assert!(host.tags.is_empty());
     }
 
     #[test]
     fn to_host_tags_split_and_trimmed() {
-        let host = host_form(["n", "h", "u", "22", "", "", "a, b ,c,,", ""])
+        let host = host_form(["n", "h", "u", "22", "", "", "", "a, b ,c,,", ""])
             .to_host(HostSource::Manual)
             .unwrap();
         assert_eq!(host.tags, vec!["a", "b", "c"]);
     }
 
     #[test]
+    fn to_host_keeps_terminal_startup_command() {
+        let host = host_form([
+            "n",
+            "h",
+            "u",
+            "22",
+            "",
+            "",
+            "ssh -tt app@10.0.0.2 'sudo -iu developer'",
+            "",
+            "",
+        ])
+        .to_host(HostSource::Manual)
+        .unwrap();
+        assert_eq!(
+            host.startup_command.as_deref(),
+            Some("ssh -tt app@10.0.0.2 'sudo -iu developer'")
+        );
+    }
+
+    #[test]
     fn to_host_source_and_metadata_propagated() {
-        let host = host_form(["n", "h", "u", "22", "", "", "", ""])
+        let host = host_form(["n", "h", "u", "22", "", "", "", "", ""])
             .to_host(HostSource::SshConfig)
             .unwrap();
         assert_eq!(host.source, HostSource::SshConfig);

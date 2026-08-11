@@ -41,6 +41,10 @@ pub struct Host {
     /// ProxyJump host alias (for bastion / jump-host setups).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub proxy_jump: Option<String>,
+    /// Command sent after an interactive terminal shell opens.
+    /// Dashboard metrics and SFTP continue to use this host directly.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub startup_command: Option<String>,
     /// Organisational tags (e.g. `["production", "web"]`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
@@ -86,6 +90,7 @@ impl Default for Host {
             identity_file: None,
             password: None,
             proxy_jump: None,
+            startup_command: None,
             tags: Vec::new(),
             notes: None,
             source: HostSource::default(),
